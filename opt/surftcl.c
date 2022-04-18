@@ -297,10 +297,13 @@ SurfTclBridgeInput(void *instanceData, char *buf, int bufSize, int *errorCodePtr
 int
 SurfTclBridgeOutput(void *instanceData, const char *buf, int toWrite, int *errorCodePtr)
 {
+    EM_ASM(console.log("beginning output"));
     BridgeState *chan = (BridgeState *)instanceData;
     int n = EM_ASM_INT({
-        Module.bridgeChannels.get(UTF8ToString($0))._tcl.output($1, $2)
+        console.log("got here");
+        return Module.bridgeChannels.get(UTF8ToString($0))._tcl.output($1, $2)
     }, &(chan->handle), buf, toWrite);
+    EM_ASM(console.log("output complete"));
 
     if (n == -1) {
         *errorCodePtr = EPIPE; /* other side no longer wants data */
@@ -321,6 +324,7 @@ SurfTclBridgeClose2(void *state, Tcl_Interp *interp, int flags)
 {
     // TODO(dther) implement half-closing logic...
     // TODO(dther) this should delete it from the JS side too
+    EM_ASM(console.log("closing??? This shouldn't happen yet"));
     return EINVAL;
 }
 
@@ -342,15 +346,18 @@ int
 SurfTclBridgeHandler(void *state, int interestMask)
 {
     // TODO(dther) what do I do here...
+    EM_ASM(console.log("we're in the handler (shouldn't happen?)"));
     return EINVAL;
 }
 
 void
 SurfTcl_NotifyBridgeWritable(Tcl_Channel chan)
 {
+    EM_ASM(console.log("notifying bridge..."));
     Tcl_NotifyChannel(chan, TCL_WRITABLE);
-    // FIXME this segfaults. I don't know why.
-    //Tcl_AlertNotifier(NULL);
+    Tcl_AlertNotifier(NULL);
+    EM_ASM(console.log("bridge has been notified"));
+    // FIXME this segfaults, *after successfully notifying*. I don't know why.
 }
 
 void
@@ -358,7 +365,7 @@ SurfTcl_NotifyBridgeReadable(Tcl_Channel chan)
 {
     Tcl_NotifyChannel(chan, TCL_READABLE);
     // FIXME this segfaults. I don't know why.
-    //Tcl_AlertNotifier(NULL);
+    Tcl_AlertNotifier(NULL);
 }
 
 static const Tcl_ChannelType SurfTclBridgeChannel = {
@@ -405,7 +412,7 @@ SurfTclOpenBridge(Tcl_Interp *interp, const char *handle, int mask)
 
     // register on the JS side
     SurfTclNewBridge(handle, chan);
-    //Tcl_RegisterChannel(interp, chan);
+    Tcl_RegisterChannel(interp, chan);
 
     return chan;
 }

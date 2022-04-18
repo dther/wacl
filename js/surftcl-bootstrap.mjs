@@ -77,6 +77,9 @@ class BridgeChannel {
         });
         */
         // XXX when does this get called???
+        return;
+        console.log(this._tclChannelPtr);
+        console.log("oh btw we got here");
         Module.ccall('SurfTcl_NotifyBridgeWritable', null, ['number'], this._tclChannelPtr);
       },
 

@@ -44,6 +44,7 @@ EM_ASYNC_JS(bool, SurfTclWake, (void),
 {
     if (Module['__surftcl_wake'] !== null) {
         Module['__surftcl_wake']();
+	Module['__surftcl_wake'] = null;
         if (Module['__surftcl_timer'])
             clearTimeout(Module['__surftcl_timer']);
         return true;
@@ -82,12 +83,16 @@ SurfTclAlertNotifier(void *cd)
  */
 EM_ASYNC_JS(void, SurfTclWait, (int32_t timeout_ms),
 {
+    console.log("waiting start...");
     await new Promise((resolve) => {
         Module['__surftcl_wake'] = resolve;
         Module['__surftcl_timer'] = setTimeout(resolve, timeout_ms);
     });
-    clearTimeout(Module.__surftcl_timer);
+    console.log("woke up");
+    clearTimeout(Module['__surftcl_timer']);
+    console.log("woke up2");
     Module['__surftcl_wake'] = null;
+    console.log("woke up3");
 });
 // TODO(dther) come up with better names for __surftcl_wake and __timer
 // namespace to `Module['__surftcl']`?
@@ -119,6 +124,7 @@ SurfTclWaitForEvent(const Tcl_Time *timePtr)
     // Otherwise, always yield to the browser on a WaitForEvent if possible,
     // even when given a time of 0.
     SurfTclWait(tclTimeMs(timePtr));
+    EM_ASM(console.log("hello?"));
     return 1;
 }
 
