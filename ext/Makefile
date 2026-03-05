@@ -1,4 +1,4 @@
-TDOMVERSION=0.8.3
+TDOMVERSION=0.9.6
 TCLLIBVERSION=1.18
 RLJSONVERSION=0.9.7
 
@@ -20,9 +20,9 @@ tdomconfig:
 	cd tdom && sed -i 's/-O2/$(BCFLAGS)/g' Makefile
 
 tdomprep:
-	wget -nc https://github.com/downloads/tDOM/tdom/tDOM-$(TDOMVERSION).tgz
+	wget -nc http://tdom.org/downloads/tdom-$(TDOMVERSION)-src.tgz
 	mkdir -p tdom
-	tar -C tdom --strip-components=1 -xf tDOM-$(TDOMVERSION).tgz
+	tar -C tdom --strip-components=1 -xf tdom-$(TDOMVERSION)-src.tgz
 	cd tdom && patch --verbose -p1 < ../tdom.patch
 	cd tdom && autoconf
 

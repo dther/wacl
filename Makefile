@@ -1,6 +1,6 @@
 # Tcl version. Relies on tcl-core$(TCLVERSION) being vailable at sourceforge
 TCLVERSION?=8.6.6
-TDOMVERSION?=0.8.3
+TDOMVERSION?=0.9.6
 RLJSONVERSION?=0.9.7
 
 INSTALLDIR=jsbuild
@@ -27,11 +27,29 @@ WACLEXPORTS=\
 		'_main',\
 		'_Wacl_GetInterp',\
 		'_Tcl_Eval',\
-		'_Tcl_GetStringResult',\
+		'_Tcl_GetStringResult'\
 	]"
 
-.PHONY: all wacl.bc extensions waclinstall preGeneratedJs clean distclean tclprep reset install uninstall
+WASMFLAGS_MINIMAL=\
+    --pre-js preGeneratedJs.js --post-js js/postJsRequire.js $(BCFLAGS) \
+    -s FORCE_FILESYSTEM=1 -s EXPORTED_RUNTIME_METHODS='["cwrap"]'
 
+.PHONY: all wacl.bc extensions waclinstall preGeneratedJs clean distclean tclprep reset install uninstall minimal-library minimal-preGeneratedJs minimal
+
+minimal-library:
+	mkdir -p library
+	cp -r $(INSTALLDIR)/lib/tcl8* library/
+
+minimal-preGeneratedJs: minimal-library
+	python3 $(EMSCRIPTEN)/tools/file_packager.py wacl-library.data \
+		--preload library@/usr/lib/ | tail -n +5 > library.js
+	cat js/preJsRequire.js library.js > preGeneratedJs.js
+	rm -f library.js
+
+minimal: wacl.bc waclinstall minimal-preGeneratedJs
+	emcc $(WASMFLAGS_MINIMAL) $(WACLEXPORTS) \
+	        $(INSTALLDIR)/lib/libtcl8.6.a \
+	        -o wacl-minimal.js
 
 all: wacl.js
 

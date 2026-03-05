@@ -1,3 +1,68 @@
+# Tclsh? In *my* web browser?
+> It's more likely than you think.
+
+Today, The average web browser is now magnitudes larger and more complex than the systems Ousterhout devised Tcl for.
+
+Wacl by Eckhard Lehman was a proof of concept that
+Tcl's mature and battle-tested codebase was portable to the web,
+could be integrated to the web with *new features,*
+while being fast and performant using the new (at the time) Wasm compilation target.
+
+It was last updated 9 years ago- but today, in the Year of Our Lord, 2026,
+it *still compiles! Sort of!*
+This, including the funky little demo in `wasm-minimal-demo/wasm/index.html`,
+was compiled with *Emscripten 5!* Four breaking versions later,
+and it still works!
+
+I had to strip out all the extra stuff to make this happen-
+the latest `tdom` is no longer patch-compatible,
+and I wanted to see the minimum viable product I could build *right now*
+ before I go messing with all the levers.
+
+This minimal wacl demo doesn't have nearly as much features as the original,
+but I intend to expand upon it with all the *stuff* that's happened since
+Wasm and WebComponents were adopted as web technology standards,
+and now that the Web has become more-or-less feature complete.
+
+Watch this space!
+
+## How do I use it?
+Currently, go to `wasm-minimal-demo/wasm/index.html`.
+Try running the code.
+Stdout is currently redirected straight to the JS console.
+I'm working on making it direct to somewhere user-facing.
+
+## What changed?
+External dependencies have been temporarily removed.
+Dead links need to be fixed, and new patches need to be tested,
+for them to be re-integrated.
+
+Makefile has been updated with new recipes for `wacl-minimal`.
+This builds Wacl without pulling in external dependencies.
+
+## What works?
+- Interpreter definitely interprets Tcl.
+- Stdout goes to the JS Console, not to the demo's output.
+  Ignore all the text on the demo page, all the information is out of date.
+- Event loop works! `after 5000 {puts "hello"}`
+  will schedule the script as you'd expect!
+
+## How do I build?
+
+- use Emscripten 5.0.2
+- `make waclprep`, if it errors don't worry about it, we just need the Tcl source
+- `make minimal`
+- `wacl-minimal.js` and `wacl-minimal.wasm` are your artefacts
+
+The Makefile edits are quick and dirty and NOT heavily tested,
+so best of luck. A future rewrite is highly likely.
+
+## What's next?
+A terminal.
+
+Old README below.
+
+---
 # wacl
 
 ### A Tcl distribution for WebAssembly or Javascript
