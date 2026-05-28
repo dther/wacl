@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>wacl: Tcl in the browser</title>
+
+<style>
+  html, body { height: 100%; margin: 0; background: #111; color: #ddd; }
+  body {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+  .term {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    padding: 0.5rem;
+    box-sizing: border-box;
+  }
+  .term-out {
+    flex: 1;
+    margin: 0;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .term-line { display: flex; }
+  .term-prompt { color: #8c8; white-space: pre; }
+  .term-input {
+    flex: 1;
+    background: transparent;
+    color: inherit;
+    border: none;
+    outline: none;
+    font: inherit;
+    padding: 0;
+  }
+
+  /* ANSI SGR colors — standard 8, plus bold */
+  .ansi-bold   { font-weight: bold; }
+  .ansi-fg-0 { color: #555; } .ansi-bg-0 { background: #555; }
+  .ansi-fg-1 { color: #e55; } .ansi-bg-1 { background: #e55; }
+  .ansi-fg-2 { color: #8c8; } .ansi-bg-2 { background: #8c8; }
+  .ansi-fg-3 { color: #cc6; } .ansi-bg-3 { background: #cc6; }
+  .ansi-fg-4 { color: #88c; } .ansi-bg-4 { background: #88c; }
+  .ansi-fg-5 { color: #c8c; } .ansi-bg-5 { background: #c8c; }
+  .ansi-fg-6 { color: #6cc; } .ansi-bg-6 { background: #6cc; }
+  .ansi-fg-7 { color: #eee; } .ansi-bg-7 { background: #eee; }
+
+  .term-err { color: #e88; }
+</style>
+</head>
+<body>
+
+<div class="term" id="term"></div>
+
+<!--
+  wacl-minimal.js is the Emscripten build artifact. It defines itself as the
+  named AMD module "tcl/wacl" and uses require.toUrl("tcl/") to locate its
+  wasm payload, which it expects to find as "wacl.wasm" at that path.
+
+  Rather than pull in RequireJS, we provide just enough of the AMD surface
+  to satisfy it. The wasm file is reached via a wacl.wasm symlink pointing
+  at wacl-minimal.wasm in this directory.
+-->
+<script>
+  const __modules = {};
+  function define(name, factory) { __modules[name] = factory(); }
+  define.amd = {};
+  function require(deps, cb) { cb.apply(null, deps.map(d => __modules[d])); }
+  require.toUrl = function (p) { return p === "tcl/" ? "" : p; };
+</script>
+<script src="wacl-minimal.js"></script>
+
+<script>
+"use strict";
+
+// A tiny channel between a DOM-based terminal surface and anything that wants
+// to stream bytes at it. No transport assumed: the same object would work
+// with a wasm interp, a WebSocket, or a mock in a test.
+//
+// Construction:
+//   const term = WaclTerminal({ mount, prompt, onLine });
+// Methods:
+//   term.write(text)     — append text from "stdout"
+//   term.writeErr(text)  — append text from "stderr" (styled distinctly)
+//   term.clear()         — empty the output
+//   term.setPrompt(text) — change the prompt
+//   term.focus()         — focus the input
+//
+// ANSI: only SGR (\x1b[...m) is honored — colors, bold, reset. Any other
+// escape sequences are stripped silently. This is a terminal *surface*,
+// not a VT100 emulator.
+function WaclTerminal({ mount, prompt = "% ", onLine = () => {} }) {
+  const root = document.createElement("div");
+  root.className = "term-inner";
+
+  const output = document.createElement("pre");
+  output.className = "term-out";
+
+  const line = document.createElement("div");
+  line.className = "term-line";
+
+  const promptEl = document.createElement("span");
+  promptEl.className = "term-prompt";
+  promptEl.textContent = prompt;
+
+  const input = document.createElement("input");
+  input.className = "term-input";
+  input.autocapitalize = "off";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.setAttribute("aria-label", "wacl input");
+
+  line.append(promptEl, input);
+  mount.append(output, line);
+
+  // Persistent SGR state — sequences set style that lasts until reset.
+  let style = { fg: null, bg: null, bold: false };
+
+  function styleClasses() {
+    const cs = [];
+    if (style.bold) cs.push("ansi-bold");
+    if (style.fg !== null) cs.push("ansi-fg-" + style.fg);
+    if (style.bg !== null) cs.push("ansi-bg-" + style.bg);
+    return cs;
+  }
+
+  function applySgr(codes) {
+    for (const c of codes) {
+      if (c === 0)              style = { fg: null, bg: null, bold: false };
+      else if (c === 1)         style.bold = true;
+      else if (c === 22)        style.bold = false;
+      else if (c >= 30 && c <= 37) style.fg = c - 30;
+      else if (c === 39)        style.fg = null;
+      else if (c >= 40 && c <= 47) style.bg = c - 40;
+      else if (c === 49)        style.bg = null;
+      // unknown codes ignored
+    }
+  }
+
+  // Walk a chunk of text, splitting on ESC sequences. Yields either
+  // { text } for literal runs or { sgr: [codes] } for honored sequences.
+  // CSI sequences other than SGR are consumed silently; lone ESC and
+  // non-CSI escapes drop the next character.
+  function* parse(text) {
+    let i = 0;
+    while (i < text.length) {
+      const esc = text.indexOf("\x1b", i);
+      if (esc < 0) { yield { text: text.slice(i) }; return; }
+      if (esc > i) yield { text: text.slice(i, esc) };
+      if (text[esc + 1] !== "[") { i = esc + 2; continue; }
+      const rest = text.slice(esc + 2);
+      const endRel = rest.search(/[A-Za-z]/);
+      if (endRel < 0) return; // incomplete sequence at buffer end
+      const final = rest[endRel];
+      const params = rest.slice(0, endRel);
+      if (final === "m") {
+        const codes = params === "" ? [0]
+          : params.split(";").map(n => parseInt(n, 10) || 0);
+        yield { sgr: codes };
+      }
+      i = esc + 2 + endRel + 1;
+    }
+  }
+
+  function append(text, extraClass) {
+    for (const tok of parse(text)) {
+      if (tok.sgr) { applySgr(tok.sgr); continue; }
+      const classes = styleClasses();
+      if (extraClass) classes.push(extraClass);
+      if (classes.length === 0) {
+        output.appendChild(document.createTextNode(tok.text));
+      } else {
+        const span = document.createElement("span");
+        span.className = classes.join(" ");
+        span.textContent = tok.text;
+        output.appendChild(span);
+      }
+    }
+    output.scrollTop = output.scrollHeight;
+  }
+
+  // History — arrow keys walk it; Enter pushes the submitted line.
+  const history = [];
+  let cursor = 0;
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      const value = input.value;
+      input.value = "";
+      append(promptEl.textContent + value + "\n");
+      if (value !== "" && history[history.length - 1] !== value) history.push(value);
+      cursor = history.length;
+      onLine(value);
+    } else if (e.key === "ArrowUp") {
+      if (cursor > 0) { cursor--; input.value = history[cursor]; }
+      e.preventDefault();
+    } else if (e.key === "ArrowDown") {
+      if (cursor < history.length - 1) { cursor++; input.value = history[cursor]; }
+      else { cursor = history.length; input.value = ""; }
+      e.preventDefault();
+    }
+  });
+
+  // Clicking anywhere in the terminal focuses the input — saves the user
+  // from hunting for a cursor. We don't steal focus mid-selection though.
+  mount.addEventListener("mousedown", (e) => {
+    if (window.getSelection().toString() === "" && e.target !== input) {
+      setTimeout(() => input.focus(), 0);
+    }
+  });
+
+  return {
+    write:     (text) => append(text),
+    writeErr:  (text) => append(text, "term-err"),
+    clear:     () => { while (output.firstChild) output.removeChild(output.firstChild); },
+    setPrompt: (p) => { promptEl.textContent = p; },
+    focus:     () => input.focus(),
+  };
+}
+
+// Boot: wire the terminal to the Tcl interpreter once the wasm is ready.
+require(["tcl/wacl"], function (wacl) {
+  wacl.onReady(function (interp) {
+    const term = WaclTerminal({
+      mount: document.getElementById("term"),
+      prompt: "% ",
+      onLine: (line) => {
+        if (line === "") return;
+        try {
+          const result = interp.Eval(line);
+          if (result !== "") term.write(result + "\n");
+        } catch (e) {
+          term.writeErr((e.errorInfo || String(e)) + "\n");
+        }
+      },
+    });
+
+    // Route the interp's stdout/stderr into the terminal. The interp emits
+    // one call per puts (no trailing newline), so we add it here.
+    interp.stdout = (text) => term.write(text + "\n");
+    interp.stderr = (text) => term.writeErr(text + "\n");
+
+    term.write("wacl — Tcl " + interp.Eval("info patchlevel") + "\n");
+    term.write("type tcl. try: puts \"hello\"  or  expr {2+2}\n\n");
+    term.focus();
+  });
+});
+</script>
+
+</body>
+</html>
