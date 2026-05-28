@@ -31,10 +31,18 @@ define('tcl/wacl', function () {
   var Module;
   if (typeof Module === 'undefined') Module = eval('(function() { try { return Module || {} } catch(e) { return {} } })()');
   
+  // Stdout/stderr are routed through mutable sinks. Emscripten's runtime
+  // captures `out = Module.print` once (during run(), after wasm load), so
+  // a later `Module.print = fn` would be ignored. By making Module.print a
+  // stable wrapper that delegates to a swappable variable, the setters in
+  // _Result below can redirect output at any time.
+  var _stdoutSink = function (txt) { console.log('wacl stdout: ' + txt); };
+  var _stderrSink = function (txt) { console.error('wacl stderr: ' + txt); };
+
   Module['noInitialRun'] = false;
   Module['noExitRuntime'] = true;
-  Module['print'] = function(txt) { console.log('wacl stdout: ' + txt); };
-  Module['printErr'] = function(txt) { console.error('wacl stderr: ' + txt); };
+  Module['print']    = function (txt) { _stdoutSink(txt); };
+  Module['printErr'] = function (txt) { _stderrSink(txt); };
   Module['filePackagePrefixURL'] = _currPath;
   
   Module['instantiateWasm'] = function(imports, successCallback) {
@@ -59,10 +67,10 @@ define('tcl/wacl', function () {
       Module: Module,
      
       set stdout(fn) {
-        Module.print = fn;
+        _stdoutSink = fn;
       },
       set stderr(fn) {
-        Module.printErr = fn;
+        _stderrSink = fn;
       },
       get interp() {
         return _Interp;

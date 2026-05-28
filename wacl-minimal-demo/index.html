@@ -241,18 +241,6 @@ function WaclTerminal({ mount, prompt = "% ", onLine = () => {} }) {
 
 // Boot: wire the terminal to the Tcl interpreter once the wasm is ready.
 require(["tcl/wacl"], function (wacl) {
-
-  // Emscripten captures `out = Module.print` once, when run() fires after
-  // the wasm finishes loading. That's why the `interp.stdout = fn` setter
-  // appears to do nothing — by onReady time, the original reference is
-  // already cached. We install a stable wrapper *now* (synchronously, while
-  // run() is still pending the async wasm fetch) and delegate to a mutable
-  // sink that we swap once the terminal exists.
-  let stdoutSink = (text) => console.log("wacl stdout (pre-boot): " + text);
-  let stderrSink = (text) => console.error("wacl stderr (pre-boot): " + text);
-  wacl.Module.print    = (text) => stdoutSink(text);
-  wacl.Module.printErr = (text) => stderrSink(text);
-
   wacl.onReady(function (interp) {
     const term = WaclTerminal({
       mount: document.getElementById("term"),
@@ -268,10 +256,11 @@ require(["tcl/wacl"], function (wacl) {
       },
     });
 
-    // The interp emits one Module.print call per puts line, no trailing
-    // newline. Add it here.
-    stdoutSink = (text) => term.write(text + "\n");
-    stderrSink = (text) => term.writeErr(text + "\n");
+    // The interp emits one call per puts (no trailing newline), so we add
+    // it here. The setters swap mutable sinks behind Module.print, so this
+    // works after Emscripten has already captured its `out` reference.
+    interp.stdout = (text) => term.write(text + "\n");
+    interp.stderr = (text) => term.writeErr(text + "\n");
 
     term.write("wacl — Tcl " + interp.Eval("info patchlevel") + "\n");
     term.write("type tcl. enter submits, shift+enter for a newline.\n\n");
