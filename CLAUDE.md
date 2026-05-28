@@ -61,16 +61,24 @@ during `run()`, after the async wasm fetch resolves. After that
 capture, mutating `Module.print` is a no-op.
 
 The original `_Result.stdout` setter (`set stdout(fn) { Module.print = fn }`)
-was therefore broken — it never actually redirected `puts` output.
-The pre-revival demo masked this because it only displayed `Eval`
-return values, not anything that went through `puts`.
+no longer works against current Emscripten — by the time `onReady` fires,
+`out` has already been cached, so reassigning `Module.print` has no
+effect on `puts`.
+
+Per dther, this setter *did* work in ecky-l's original demo, ~9 years ago.
+Best guesses for what changed: Emscripten's runtime initialization
+semantics shifted across four major versions (very likely), or the
+original output path went through tdom somehow (equally plausible, no
+direct proof). Worth keeping in mind if you go digging — there's a
+specific commit somewhere in Emscripten that introduced the
+capture-once behavior.
 
 Current fix (commit 22ec549): `preJsRequire.js` introduces
 `_stdoutSink` / `_stderrSink` mutables. `Module.print` becomes a
 stable wrapper that delegates to whichever sink is currently
 assigned. The `set stdout`/`set stderr` accessors on `_Result` swap
-the sink rather than reassigning `Module.print`, so they work at
-any time — long after Emscripten has cached its `out` reference.
+the sink rather than reassigning `Module.print`, so they work
+regardless of when Emscripten decides to capture.
 
 The same patch is applied to the built `wacl-minimal.js` directly,
 so the demo runs without a rebuild. `preJsRequire.js` is the
