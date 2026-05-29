@@ -179,20 +179,29 @@ registry the host fills explicitly.
     interp.js.names()              // array of registered names
 
   Tcl side:
-    ::wacl::js::call NAME ARGLIST  // ARGLIST is a Tcl list
-    ::wacl::js::names              // Tcl list of registered names
+    ::wacl::js::call NAME ?ARG ...?   // varargs; JS sees a string[]
+    ::wacl::js::names                 // Tcl list of registered names
 
 There is no Tcl-side `register`. The host grants what the inner
 interp may call; the inner interp can introspect but not extend the
 registry. SurfTcl is a polite guest.
 
-**Argument convention.** ARGLIST is destructured with
-`Tcl_ListObjGetElements` and its elements arrive on the JS side as
-a single string array. The C bridge is type-blind; all marshalling
-and any application-level type checking lives in the registered JS
-function. Anything richer than a string (objects, arrays of
-non-strings) is the caller's job to serialize — JSON is the default
-since the ecosystem already speaks it.
+**Argument convention.** All args after NAME are passed varargs-style
+and arrive on the JS side as one array of strings. To pass an existing
+Tcl list as args, expand with `{*}`:
+
+    ::wacl::js::call myFn {*}$argList
+
+The C bridge is type-blind; all marshalling and any application-level
+type checking lives in the registered JS function. Anything richer
+than a string (objects, arrays of non-strings) is the caller's job to
+serialize — JSON is the default since the ecosystem already speaks it.
+
+(History note: the initial rework took a single ARG_LIST argument and
+ran `Tcl_ListObjGetElements` over it. That looks tidier, but every JS
+code block passed through `::wacl::js::call eval { ... }` had its `})`
+patterns trip Tcl's list-syntax parser. Varargs sidestep that entirely
+since `{...}` is just one brace-group at parse time, not a list.)
 
 **Return-value protocol** (normalized in `_makeJsShim` before the
 C side hears about it):

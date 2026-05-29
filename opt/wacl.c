@@ -9,11 +9,12 @@
  * Wacl's JS bridge.
  *
  * The page (JS side) registers JS functions by name; the inner interp calls
- * them as `::wacl::js::call NAME ARGS`. Conventions:
+ * them as `::wacl::js::call NAME ?ARG ...?`. Conventions:
  *
- *   - ARGS is a Tcl list. Its elements are handed to the JS function as a
- *     JS array of strings. Argument count and type checking happen on the
- *     JS side; the C bridge stays type-blind.
+ *   - Args after NAME are passed varargs-style and arrive on the JS side
+ *     as one array of strings. To pass a Tcl list as args, use
+ *     `::wacl::js::call NAME {*}$myList`. Argument count and type checking
+ *     happen on the JS side; the C bridge stays type-blind.
  *   - The JS function returns either a bare value (becomes the Tcl result
  *     with TCL_OK), a [status, value] pair, or throws an Error (TCL_ERROR
  *     with the message). The five-name status convention (`ok`, `error`,
@@ -96,8 +97,8 @@ static int
 JsCallCmd(ClientData clientData, Tcl_Interp *interp,
           int objc, Tcl_Obj *const objv[])
 {
-    if (objc != 3) {
-        Tcl_WrongNumArgs(interp, 1, objv, "name argList");
+    if (objc < 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "name ?arg ...?");
         return TCL_ERROR;
     }
 
@@ -110,18 +111,12 @@ JsCallCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    Tcl_Size argcSz;
-    Tcl_Obj **argObjs;
-    if (Tcl_ListObjGetElements(interp, objv[2], &argcSz, &argObjs) != TCL_OK) {
-        return TCL_ERROR;
-    }
-    int argc = (int) argcSz;
-
+    int argc = objc - 2;
     const char **argv = NULL;
     if (argc > 0) {
         argv = (const char **) Tcl_Alloc(argc * sizeof(char *));
         for (int i = 0; i < argc; i++) {
-            argv[i] = Tcl_GetString(argObjs[i]);
+            argv[i] = Tcl_GetString(objv[i + 2]);
         }
     }
 
