@@ -7,3 +7,4 @@ wacl.wasm
 /jsbuild/
 /library/
 /tcl/
+/tcl9-spike/

@@ -25,7 +25,7 @@ enum _valTypesEnum
 
 
 static int 
-DomCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[])
+DomCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 {
 	char *argsHelp = "attr|css selector key val";
 	if (objc != 5) {
@@ -140,7 +140,7 @@ switch (argTypeN)\
 
 
 static int 
-JsCallCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[]) 
+JsCallCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]) 
 {
     int fcnPtr, retTypeN, argTypeN;
 
@@ -214,3 +214,27 @@ Wacl_Init(Tcl_Interp* interp)
     return TCL_OK;
 }
 
+
+/*
+ * Tcl 9 turned Tcl_Eval and Tcl_GetStringResult into macros (the former
+ * expands to Tcl_EvalEx, the latter to Tcl_GetString(Tcl_GetObjResult(...))).
+ * The wacl JS bridge cwraps them by name and needs real symbols, so we
+ * provide thin wrappers under the original names. In Tcl 8.x these are
+ * real library functions and the wrappers must NOT be defined or we get
+ * duplicate symbols at link time.
+ */
+#if TCL_MAJOR_VERSION >= 9
+#undef Tcl_Eval
+int
+Tcl_Eval(Tcl_Interp *interp, const char *script)
+{
+    return Tcl_EvalEx(interp, script, TCL_INDEX_NONE, 0);
+}
+
+#undef Tcl_GetStringResult
+const char *
+Tcl_GetStringResult(Tcl_Interp *interp)
+{
+    return Tcl_GetString(Tcl_GetObjResult(interp));
+}
+#endif
