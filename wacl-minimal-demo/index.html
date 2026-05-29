@@ -261,6 +261,14 @@ require(["tcl/wacl"], function (wacl) {
     interp.stdout = (text) => term.write(text);
     interp.stderr = (text) => term.writeErr(text);
 
+    // Expose __interp / __wacl globally up front. The wacl-* packages
+    // installed below run their JS shims via `::wacl::js::call eval {…}`,
+    // and that code does `__interp.js.register(…)` — so __interp must be
+    // a real global by the time any `package require wacl::*` runs, not
+    // just a window property set later for the JS console.
+    window.__interp = interp;
+    window.__wacl = wacl;
+
     // Grant a couple of JS functions to the inner Tcl interp. The host
     // decides what the inner interp can reach into; nothing JS-side is
     // visible by default. `eval` here is the obvious foot-gun and the
@@ -280,19 +288,57 @@ require(["tcl/wacl"], function (wacl) {
       return String(r);
     });
 
+    // JS-side packages. Each is a small Tcl module that uses the granted
+    // `eval` to install its JS shims at require-time, then exposes a Tcl
+    // surface. Fetched here, dropped into the in-wasm filesystem, added
+    // to auto_path. They're not pre-required — the user runs
+    // `package require wacl::json` (etc) themselves, demonstrating the
+    // bootstrap-then-seal flow: require what you want, then revoke eval.
+    const packageFiles = [
+      "packages/wacl-json/pkgIndex.tcl",
+      "packages/wacl-json/wacl-json.tcl",
+      "packages/wacl-dom/pkgIndex.tcl",
+      "packages/wacl-dom/wacl-dom.tcl",
+      "packages/wacl-chan/pkgIndex.tcl",
+      "packages/wacl-chan/wacl-chan.tcl",
+    ];
+
+    function installPackages() {
+      return Promise.all(packageFiles.map((p) =>
+        fetch(p).then((r) => {
+          if (!r.ok) throw new Error(p + ": " + r.status);
+          return r.text();
+        }).then((body) => {
+          const fullPath = "/" + p;
+          const dir = fullPath.substring(0, fullPath.lastIndexOf("/"));
+          try { interp.Module.FS.mkdirTree(dir); } catch (e) {}
+          interp.Module.FS.writeFile(fullPath, body);
+        })
+      )).then(() => {
+        interp.Eval("lappend auto_path /packages");
+      });
+    }
+
     term.write("wacl — Tcl " + interp.Eval("info patchlevel") + "\n");
     term.write("type tcl. enter submits, shift+enter for a newline.\n");
     term.write("JS bridge: ::wacl::js::call NAME ARGLIST; granted: " +
-               interp.Eval("::wacl::js::names") + "\n\n");
+               interp.Eval("::wacl::js::names") + "\n");
+
+    installPackages().then(() => {
+      term.write("packages: wacl::json, wacl::dom, wacl::chan " +
+                 "(package require <name>; then ::wacl::js::revoke eval)\n\n");
+    }).catch((e) => {
+      term.writeErr("package install failed: " + e + "\n\n");
+    });
+
     term.focus();
 
-    // Debug hooks for poking from the JS console. Try:
+    // (__interp / __wacl were set above for the package install code;
+    // the same handles are what you'd poke from the JS console.)
     //   __interp.Eval("expr {2+2}")
     //   __interp.pushStdin("hello\n"); __interp.Eval("gets stdin")
     //   __interp.js.register("ping", a => "pong:" + a.join(","))
-    //   __interp.Eval("::wacl::js::call ping {one two three}")
-    window.__interp = interp;
-    window.__wacl = wacl;
+    //   __interp.Eval("::wacl::js::call ping one two three")
   });
 });
 </script>

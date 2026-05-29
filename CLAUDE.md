@@ -253,6 +253,64 @@ idiomatic workaround for the caller is `after 0 [list ...]`, which
 queues the inner script to run when the current evaluation stack
 unwinds.
 
+## The wacl-* packages (`wacl-minimal-demo/packages/`)
+
+Three Tcl packages that demonstrate the bootstrap-then-seal pattern in
+miniature. Each one self-installs its JS shims at `package require` time
+using the host-granted `eval`, then exposes a Tcl-side surface. The
+intended flow is `require X; require Y; …; ::wacl::js::revoke eval` —
+after the revoke, no more bridged packages can be added, but the ones
+already loaded keep working.
+
+  - **wacl::json** — `wacl::json get $blob ?key…?` and
+    `wacl::json exists $blob ?key…?`. Path traversal in JS via
+    `JSON.parse`; values come back as strings (objects/arrays as
+    re-stringified JSON so you can recurse). Deliberately no
+    `stringify`: Tcl can't discriminate the string `"true"` from
+    boolean `true`, so Tcl→JSON is ambiguous in a way JSON→Tcl
+    isn't. Escape via `::wacl::js::call eval {JSON.stringify(…)}`
+    until a proper Tcl-side builder exists.
+
+  - **wacl::dom** — `wacl::dom bind SELECTOR EVENT SCRIPT` /
+    `wacl::dom unbind HANDLE` / `wacl::dom event FIELD`. Composes
+    via `addEventListener` (no interference with other listeners).
+    Inside the handler, `[wacl::dom event clientX]`,
+    `[wacl::dom event target.id]` etc. do lazy dot-path lookup on
+    the currently-dispatched event — chosen over Tk-style %-subs
+    so the package doesn't have to pre-decide which fields to
+    expose. The eval-fence does **not** trip: DOM events fire from
+    the JS event loop between Tcl_Eval calls, not synchronously
+    inside one.
+
+  - **wacl::chan** — `set ch [wacl::chan open NAME]` returns a Tcl
+    reflected channel (`chan create`), bidirectional and binary.
+    JS side attaches with `globalThis.waclChan.attach(NAME)` to
+    get `{onData, write, close}`. Bytes round-trip via latin-1 to
+    preserve identity (a Uint8Array byte N becomes JS code-point N
+    becomes Tcl code-point N becomes the literal byte N out of a
+    binary-translation channel). JS writes call `chan postevent`
+    via setTimeout(0) to defer past any current Eval frame —
+    otherwise the re-entrant Tcl_Eval fence would refuse. This is
+    the lever for "JS as a Tcl event queue": channels with
+    `fileevent` are how arbitrary JS-side events (clicks, fetch
+    responses, WebSocket frames) dispatch into Tcl with all the
+    normal event-loop machinery.
+
+**Bootstrap dependency.** Package shims hard-code `globalThis.__interp`
+as the wacl handle, because eval'd code runs in global scope and can't
+see closure variables from the handler that called `(0, eval)`. The
+demo sets `window.__interp = interp` *before* installing packages, so
+the first `package require` works. Pages that swap out the demo's
+bootstrap must keep this invariant.
+
+**Layout.** `wacl-minimal-demo/packages/wacl-<name>/{pkgIndex.tcl,
+wacl-<name>.tcl}` — one main `.tcl` per package, code-as-documentation,
+no minification. The demo fetches them at boot, drops them into the
+in-wasm FS via `Module.FS.writeFile`, and `lappend auto_path /packages`.
+Once the JS-side `TclZipfs_Mount` cwrap lands (see punted), pages will
+ship packages as a zip and mount, but this fetch-then-write path stays
+viable for development.
+
 ## Packaging philosophy: zipfs as the lever, no package manager
 
 Tcl 9's zipfs gives us first-class app packaging for free: a single
