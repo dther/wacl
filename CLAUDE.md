@@ -16,7 +16,10 @@ the browser, ~200 lines, one file, no framework, no build step on the
 page side.
 
 A rename is planned to mark the graduation from "Eckhard's 8.6 demo
-revived" to "modern Tcl 9 web distribution." Hasn't been picked yet.
+revived" to "modern Tcl 9 web distribution." Current proposal:
+**SurfTcl**. The rename waits until the demo grows DOM manipulation
+(via the planned tDom integration) and feels like a complete pitch —
+don't rename mid-rework.
 
 ## Aesthetic constraints
 
@@ -59,6 +62,15 @@ The user has a specific position on what this project should look like:
   linked at the final emcc step — not bundled into `libtcl9.0.a` via
   patch the way ecky-l's 8.6 build did. Simpler and means we don't
   patch the Tcl source tree at all.
+- Build flags include `ALLOW_TABLE_GROWTH=1` so the JS bridge can use
+  `Module.addFunction`, and `EXPORTED_RUNTIME_METHODS` carries
+  `cwrap`, `FS`, `addFunction`, `removeFunction`, `getValue`,
+  `UTF8ToString`. The Tcl-callable C entry points exported via
+  `EXPORTED_FUNCTIONS` are `_main`, `_Wacl_GetInterp`, `_Tcl_Eval`,
+  `_Tcl_GetStringResult`, plus the JS-bridge four:
+  `_Wacl_RegisterJsFn`, `_Wacl_RevokeJsFn`, `_Wacl_SetJsResultString`,
+  `_Wacl_AppendJsErrorCodeElement`. If you add a C entry point and
+  call it from JS, both lists need updating.
 - JS glue around the emcc output lives in `js/`:
   - **`js/preJsRequire.js`** — the AMD wrapper prepended to the emcc
     output. **This is the configurability lever for the JS↔Tcl bridge.**
@@ -118,16 +130,15 @@ direct proof). Worth keeping in mind if you go digging — there's a
 specific commit somewhere in Emscripten that introduced the
 capture-once behavior.
 
-Current fix (commit 22ec549): `preJsRequire.js` introduces
-`_stdoutSink` / `_stderrSink` mutables. `Module.print` becomes a
-stable wrapper that delegates to whichever sink is currently
-assigned. The `set stdout`/`set stderr` accessors on `_Result` swap
-the sink rather than reassigning `Module.print`, so they work
-regardless of when Emscripten decides to capture.
-
-The same patch is applied to the built `wacl-minimal.js` directly,
-so the demo runs without a rebuild. `preJsRequire.js` is the
-canonical source though; a `make minimal` regenerates from it.
+**Current fix (commit 3f04879):** stdout/stderr are wired through
+`FS.init(stdin, stdout, stderr)` in `preRun`, the idiomatic Emscripten
+path. The callbacks are byte-granular (`null` flushes); we line-buffer
+into text and hand the decoded string to mutable `_stdoutSink` /
+`_stderrSink` slots. The `set stdout` / `set stderr` accessors on
+`_Result` swap the slot. As a bonus the same wiring gives us a real
+stdin channel: `_Result.pushStdin(text)` appends bytes for a Tcl
+`gets stdin` to drain; `closeStdin()` signals EOF. The earlier
+`Module.print`-wrapper trick is gone.
 
 ## The Module-shadowing trap
 
@@ -151,6 +162,126 @@ clue that the original author *thought* this worked.
 If you need to inject anything Module-shaped from outside, do it
 through `preJsRequire.js` directly, not by trying to pre-set a global.
 
+## The JS bridge (`::wacl::js` + `interp.js`)
+
+How the inner Tcl interp reaches back into the page. The pre-rework
+`::wacl::jscall fcnPtr returnType argType ?arg?` was a type-dispatch
+tarpit — Cartesian-product macros over one return type and one arg
+type — and exposed raw Emscripten function-table indices to every Tcl
+caller. The rework (commit 5d60999) replaces it with a name-keyed
+registry the host fills explicitly.
+
+**Surface:**
+
+  JS host side:
+    interp.js.register(name, fn)   // fn(args:string[]) -> value
+    interp.js.revoke(name)
+    interp.js.names()              // array of registered names
+
+  Tcl side:
+    ::wacl::js::call NAME ARGLIST  // ARGLIST is a Tcl list
+    ::wacl::js::names              // Tcl list of registered names
+
+There is no Tcl-side `register`. The host grants what the inner
+interp may call; the inner interp can introspect but not extend the
+registry. SurfTcl is a polite guest.
+
+**Argument convention.** ARGLIST is destructured with
+`Tcl_ListObjGetElements` and its elements arrive on the JS side as
+a single string array. The C bridge is type-blind; all marshalling
+and any application-level type checking lives in the registered JS
+function. Anything richer than a string (objects, arrays of
+non-strings) is the caller's job to serialize — JSON is the default
+since the ecosystem already speaks it.
+
+**Return-value protocol** (normalized in `_makeJsShim` before the
+C side hears about it):
+
+    undefined / null     -> TCL_OK, result ""
+    any scalar           -> TCL_OK, result = String(value)
+    [status, value]:
+      number n             -> Tcl return code n. 0=OK, 1=ERROR,
+                              2=RETURN, 3=BREAK, 4=CONTINUE;
+                              >=5 are custom catch'able codes.
+      "ok" | "error" | "return" | "break" | "continue"
+                           -> the corresponding code by name (lowercase).
+      any other string     -> TCL_ERROR, ::errorCode = {string}
+      array of strings     -> TCL_ERROR, ::errorCode = that list
+                              (suitable for `try ... trap PATTERN`)
+    thrown Error           -> TCL_ERROR with the message
+
+**Bootstrap-then-seal pattern.** The intended use of the registry
+is: page registers `eval` (and any other broad capabilities) at
+startup, Tcl bootstrap uses `::wacl::js::call eval { ... }` to
+build a domain-specific surface (DOM ops, fetch, WebSocket, file
+pickers), then the page calls `interp.js.revoke("eval")` before
+any untrusted script gets to evaluate. The capability is gone for
+real — `revoke` removes the hash entry and frees the Emscripten
+function-table slot via `Module.removeFunction`.
+
+This is not a rare flow. It is the **default shape** for SurfTcl
+apps. Documented as such so we don't drift toward "expose
+everything by default" out of laziness.
+
+**Implementation map.** Side-channel `Wacl_SetJsResultString` /
+`Wacl_AppendJsErrorCodeElement` (called by the JS shim before its
+return) carry value and errorCode-list across the wasm boundary.
+The function's own integer return is the Tcl status code. C side
+in `opt/wacl.c`; JS side in `js/preJsRequire.js`.
+
+## Re-entrant Tcl_Eval fence
+
+`opt/wacl.c`'s `Tcl_Eval` wrapper (commit 15842e8) refuses
+re-entrant calls from JS. JS is single-threaded so timers and
+microtasks can't produce concurrent eval, but a synchronous chain —
+`JS Eval → Tcl puts → FS.init output sink → JS Eval` — IS possible,
+and would have the two frames share one interpreter's result,
+errorInfo, and package-init state. Tcl handles nested evaluation
+fine when *Tcl* drives it (after, fileevent, command callbacks all
+go through `Tcl_DoOneEvent` / `Tcl_EvalObjEx`, not through our
+wrapper); only the JS-imposed flavour needs to be refused. The
+idiomatic workaround for the caller is `after 0 [list ...]`, which
+queues the inner script to run when the current evaluation stack
+unwinds.
+
+## Packaging philosophy: zipfs as the lever, no package manager
+
+Tcl 9's zipfs gives us first-class app packaging for free: a single
+`app.zip` of scripts mounted via `TclZipfs_Mount` works the same on
+`wish`, a Windows tclkit, and SurfTcl-in-browser. This is the basis
+for the planned LOVE-clone-style packaging story and worth treating
+as a first-class concern.
+
+**Decision: SurfTcl does not run a package manager.** The primitive
+is `surftcl::mount <buffer-or-url> <mountpoint>` and that's it. No
+`package unknown` hook that fetches transparently, no registry, no
+resolver, no lock files. The user (or their bootstrap Tcl) names
+the zips they want, mounts them, and adds the mountpoint to
+`auto_path`. Costs are visible because the user typed them.
+
+Rationale (per dther): "if you don't use it, you shouldn't pay for
+it, and a package manager hides costs." Many tcllib modules
+degrade gracefully when optional deps are missing; a transitive
+resolver would pull in dependencies the user doesn't actually need.
+The maintenance hazard ("no one wants to say no") is real and
+worth avoiding.
+
+**Distribution shape.** Pre-built per-module tcllib zips are
+release artifacts on GitHub (slicing on tcllib's existing module
+boundaries — each subdirectory already has its own `pkgIndex.tcl`,
+so zero patching). The release page IS the package index: a static
+document, not a service. Catalog as markdown is documentation, not
+infrastructure. Browser cache makes repeated loads effectively
+free. No CDN to run.
+
+**App-bundle shape.** A SurfTcl app's build step is roughly
+`zip app.zip my-scripts/ tcllib-http/ tcllib-json/ ...`. The page
+mounts that one zip at boot; no runtime resolution, ever. This is
+the LOVE-clone-style "one bundle, runs everywhere" model.
+
+The `TclZipfs_Mount` wrapper that exposes this from JS still needs
+writing — see the punted list.
+
 ## The current demo (`wacl-minimal-demo/index.html`)
 
 - One file, inline CSS + JS, no framework.
@@ -167,20 +298,47 @@ through `preJsRequire.js` directly, not by trying to pre-set a global.
 - The ANSI parser handles SGR only (`\x1b[...m`): colors 30–37 / 40–47,
   bold, reset. Other escape sequences are consumed silently rather than
   rendered as garbage.
+- The demo also registers `alert` and `eval` as example JS bridge
+  entries on the inner interp, so `::wacl::js::call eval {Math.PI}`
+  works out of the box. These are *examples* — in a real app the page
+  would register exactly what it wants the inner interp to reach, then
+  `revoke("eval")` before any untrusted code lands.
+- `window.__interp` and `window.__wacl` are exposed for JS-console
+  debugging: try `__interp.js.register("ping", a => "pong:" + a.join(","))`
+  then `__interp.Eval("::wacl::js::call ping {one two three}")`.
 
 ## Things explicitly punted
 
-- **FS.init migration in `preJsRequire.js`.** Currently stdout/stderr
-  go through the sink-wrapper trick on `Module.print`; the more
-  idiomatic Emscripten path is to wire `FS.init(stdin, stdout, stderr)`
-  inside `preRun`, which gives byte-granular I/O plus a stdin channel
-  for free. Next logical change to `preJsRequire.js`. See the docs
-  research in the conversation history if revisiting.
 - **`TclZipfs_Mount` from JS.** The runtime supports it; the JS bridge
   doesn't expose it yet. Wire it via `cwrap` and add a JS-side
-  convenience that takes an `ArrayBuffer` / fetches a URL.
+  convenience that takes an `ArrayBuffer` / fetches a URL. This is the
+  primitive the packaging philosophy above depends on; bring it up
+  alongside the first real multi-zip demo.
+- **Per-module tcllib release zips.** Prebuilt `tcllib-<module>.zip`
+  artifacts published on GitHub releases, sliced on tcllib's existing
+  module boundaries. Markdown catalog in the repo lists what's in each
+  zip and its loose deps. No CDN, no resolver — the release page IS
+  the index.
+- **`tdom` against Tcl 9.** Next big feature. After looking at how
+  ecky-l's wacl used tdom, the patch turns out to be lighter than
+  feared: Wacl's old DOM bridge is string-in/string-out — tdom never
+  sees the actual DOM, it just parses HTML strings the page hands it
+  via the JS bridge. So the patch is mostly linting and command
+  renaming for Tcl 9 compatibility; the `::wacl::RootDOM` namespace
+  variable / `WithRoot` helper this doc previously gestured at is
+  largely moot — the *caller* (in wacl) is what holds the document
+  reference, not tdom. The legacy `::wacl::dom` command in `opt/wacl.c`
+  still exists as a stop-gap; once tdom lands, equivalents go via
+  registered JS functions (`querySelectorAll`, etc.) and `::wacl::dom`
+  retires.
+- **Replace the sed-patches with named patch files.** The two
+  `waclconfig` sed lines (`ZLIB_INCLUDE`, `-DTCL_THREADS=0`) should
+  become files in a `patches/` directory (quilt-style) or a Tcl script
+  that does the rewrites. Deferred until the build pipeline is
+  otherwise stable.
 - **Real-time stdin.** The REPL is JS-driven: Enter → `interp.Eval(line)`.
-  Tcl's `gets stdin` would block; there is no async stdin channel.
+  `_Result.pushStdin` provides a queue, but there's no async event-loop
+  integration — `gets stdin` doesn't yield to the page.
 - **Spitballed idea worth recording.** The user has floated: instead of
   emulating raw mode, expose a JS keypress event stream to Tcl
   (key-downs *and* key-ups), with Tcl scheduling events when bytes
@@ -190,16 +348,6 @@ through `preJsRequire.js` directly, not by trying to pre-set a global.
   Not implemented. Do not implement without an explicit ask.
 - **A WebSocket transport** so the same terminal can front a remote
   tclsh. `WaclTerminal`'s shape was designed for it.
-- **`tdom` v2 with sub-DOM scoping.** The next-real-thing rather than
-  the next-cleanup. Modern tdom needs a fresh patch (the original
-  hard-coded operations to `document`; we want to scope to a subtree
-  for SVG, Web Components, multi-document contexts). The intended
-  abstraction is `::wacl::RootDOM` as a Tcl namespace variable, defaulting
-  to the page document, optionally wrapped by a `WithRoot` save-restore
-  helper. tdom uses handle values, not OO objects with methods, so a
-  bare variable fits the grain. Tcl's single-threaded-per-interpreter
-  semantics defang the JS-style "ambient state in async callbacks"
-  worry.
 - **C extensions via wasm side modules.** Possible in principle —
   Emscripten supports `MAIN_MODULE`/`SIDE_MODULE`, and Tcl's stubs
   table is exactly the right shape — but the build-time ABI matching
@@ -215,6 +363,12 @@ through `preJsRequire.js` directly, not by trying to pre-set a global.
   target. Order: ship working browser Tcl 9 → write the patch → run
   it against Tcl's own test suite → file the TIP with the working
   downstream as evidence.
+- **Rename to SurfTcl.** Holding until the demo has DOM manipulation
+  and feels like a complete pitch. When the rename happens it touches
+  the C symbol prefix (`Wacl_*` → `Surftcl_*` or similar), the package
+  name (`package provide wacl 1.0.0`), the Tcl namespace (`::wacl::*`),
+  build outputs, demo paths, and the repo itself. Do not rename
+  piecemeal.
 
 ## Conventions
 
