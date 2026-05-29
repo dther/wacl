@@ -216,14 +216,11 @@ Wacl_Init(Tcl_Interp* interp)
 
 
 /*
- * Tcl 9 turned Tcl_Eval and Tcl_GetStringResult into macros (the former
- * expands to Tcl_EvalEx, the latter to Tcl_GetString(Tcl_GetObjResult(...))).
- * The wacl JS bridge cwraps them by name and needs real symbols, so we
- * provide thin wrappers under the original names. In Tcl 8.x these are
- * real library functions and the wrappers must NOT be defined or we get
- * duplicate symbols at link time.
+ * Tcl 9 turned Tcl_Eval and Tcl_GetStringResult into header macros (the
+ * former expands to Tcl_EvalEx, the latter to Tcl_GetString of the obj
+ * result). The wacl JS bridge cwraps them by name, so we provide thin
+ * wrappers under the original names — #undef the macros first.
  */
-#if TCL_MAJOR_VERSION >= 9
 #undef Tcl_Eval
 int
 Tcl_Eval(Tcl_Interp *interp, const char *script)
@@ -237,4 +234,3 @@ Tcl_GetStringResult(Tcl_Interp *interp)
 {
     return Tcl_GetString(Tcl_GetObjResult(interp));
 }
-#endif
