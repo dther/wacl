@@ -256,11 +256,10 @@ require(["tcl/wacl"], function (wacl) {
       },
     });
 
-    // The interp emits one call per puts (no trailing newline), so we add
-    // it here. The setters swap mutable sinks behind Module.print, so this
-    // works after Emscripten has already captured its `out` reference.
-    interp.stdout = (text) => term.write(text + "\n");
-    interp.stderr = (text) => term.writeErr(text + "\n");
+    // The interp's stdout/stderr now go through FS.init. Sinks receive the
+    // byte stream Tcl emits, line-buffered to text, with newlines preserved.
+    interp.stdout = (text) => term.write(text);
+    interp.stderr = (text) => term.writeErr(text);
 
     term.write("wacl — Tcl " + interp.Eval("info patchlevel") + "\n");
     term.write("type tcl. enter submits, shift+enter for a newline.\n\n");

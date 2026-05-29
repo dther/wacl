@@ -21,7 +21,7 @@ BCFLAGS ?= -Oz -s WASM=1
 
 WASMFLAGS_MINIMAL = \
     --pre-js preGeneratedJs.js --post-js js/postJsRequire.js $(BCFLAGS) \
-    -s FORCE_FILESYSTEM=1 -s EXPORTED_RUNTIME_METHODS='["cwrap"]' \
+    -s FORCE_FILESYSTEM=1 -s EXPORTED_RUNTIME_METHODS='["cwrap","FS"]' \
     --embed-file tcl/unix/libtcl9.0.3.zip@/lib/tcl.zip
 
 WACLEXPORTS = \
