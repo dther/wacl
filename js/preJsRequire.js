@@ -71,6 +71,120 @@ define('tcl/wacl', function () {
     if (byte === 10 /* \n */) _flushBuf(buf, sink);
   }
 
+  // ---- JS function registry ------------------------------------------------
+  //
+  // The host (page) grants JS functions to the inner Tcl interp by name. Tcl
+  // calls them via `::wacl::js::call NAME ARG_LIST`; the list elements arrive
+  // on the JS side as a single array argument of strings. The Tcl bridge is
+  // type-blind — all marshalling and any application-level type checking is
+  // up to the JS function. See opt/wacl.c for the C-side protocol.
+  //
+  // The host may revoke any granted function. This is the lever for the
+  // bootstrap-then-seal pattern: page registers `eval` (and whatever else it
+  // wants), Tcl bootstrap runs, page revokes `eval` before any untrusted
+  // script gets to evaluate. SurfTcl is a polite guest — what it can do is
+  // exactly what the host gave it, and only for as long as the host allows.
+  //
+  // Return-value protocol (the JS function's actual return):
+  //
+  //   undefined, null      -> Tcl result is "", code is TCL_OK
+  //   any non-array value  -> Tcl result is String(value), code is TCL_OK
+  //   [status, value]      -> dispatch on status:
+  //     number n             -> Tcl return code is n. 0=OK, 1=ERROR,
+  //                             2=RETURN, 3=BREAK, 4=CONTINUE; >=5 are custom
+  //                             codes that `catch` can pick up.
+  //     "ok"|"error"|"return"|"break"|"continue"
+  //                          -> the corresponding code by name (lowercase only).
+  //     other string         -> TCL_ERROR with ::errorCode = {string}.
+  //     array of strings     -> TCL_ERROR with ::errorCode = that array.
+  //   thrown Error           -> TCL_ERROR with the error's message.
+  //
+  // Anything richer than a string (objects, arrays of non-strings) is up to
+  // the caller to serialize — JSON is the obvious default and is in the
+  // ecosystem already. The bridge moves strings.
+
+  var _setJsResult       = null;  // wired in postRun
+  var _appendErrorCodeEl = null;
+  var _registerJsFn      = null;
+  var _revokeJsFn        = null;
+
+  // name -> Emscripten function-table index, used so revoke() can free the
+  // slot via removeFunction. The same map drives _Result.js.names() so we
+  // don't have to round-trip into Tcl for introspection.
+  var _jsTableMap = Object.create(null);
+
+  function _normalizeJsResult(raw) {
+    if (raw === undefined || raw === null) {
+      return { code: 0, value: '', errorCode: null };
+    }
+    if (!Array.isArray(raw)) {
+      return { code: 0, value: String(raw), errorCode: null };
+    }
+    if (raw.length !== 2) {
+      throw new Error('wacl JS bridge: returned array must be [status, value]');
+    }
+    var status = raw[0];
+    var v = raw[1];
+    var valueStr = (v === undefined || v === null) ? '' : String(v);
+    if (typeof status === 'number') {
+      return { code: status | 0, value: valueStr, errorCode: null };
+    }
+    if (typeof status === 'string') {
+      switch (status) {
+        case 'ok':       return { code: 0, value: valueStr, errorCode: null };
+        case 'error':    return { code: 1, value: valueStr, errorCode: null };
+        case 'return':   return { code: 2, value: valueStr, errorCode: null };
+        case 'break':    return { code: 3, value: valueStr, errorCode: null };
+        case 'continue': return { code: 4, value: valueStr, errorCode: null };
+        default:         return { code: 1, value: valueStr, errorCode: [status] };
+      }
+    }
+    if (Array.isArray(status)) {
+      return { code: 1, value: valueStr, errorCode: status.map(String) };
+    }
+    throw new Error('wacl JS bridge: status must be a number, string, or string array');
+  }
+
+  function _readArgv(argc, argvPtr) {
+    // argvPtr points at a contiguous array of i32 C-string pointers in
+    // wasm linear memory. Dereference each and decode as UTF-8.
+    var args = new Array(argc);
+    for (var i = 0; i < argc; i++) {
+      var strPtr = Module.getValue(argvPtr + i * 4, 'i32');
+      args[i] = Module.UTF8ToString(strPtr);
+    }
+    return args;
+  }
+
+  function _makeJsShim(userFn) {
+    return function (argc, argvPtr) {
+      var args = _readArgv(argc, argvPtr);
+      var raw;
+      try {
+        raw = userFn(args);
+      } catch (e) {
+        _setJsResult((e && e.message) ? e.message : String(e));
+        return 1;
+      }
+      var r;
+      try {
+        r = _normalizeJsResult(raw);
+      } catch (e) {
+        _setJsResult(e.message);
+        return 1;
+      }
+      _setJsResult(r.value);
+      if (r.errorCode) {
+        for (var i = 0; i < r.errorCode.length; i++) {
+          _appendErrorCodeEl(r.errorCode[i]);
+        }
+      }
+      return r.code;
+    };
+  }
+
+  // -------------------------------------------------------------------------
+
   Module['noInitialRun'] = false;
   Module['noExitRuntime'] = true;
   Module['filePackagePrefixURL'] = _currPath;
@@ -81,8 +195,6 @@ define('tcl/wacl', function () {
   // which Emscripten's runtime caches once during run() and which were the
   // source of every "puts isn't reaching my callback" bug in this project.
   Module['preRun'] = function () {
-    // FS lives inside the runtime closure; we reach it via Module.FS, which
-    // requires "FS" in EXPORTED_RUNTIME_METHODS at build time.
     Module.FS.init(
       function () {
         if (_stdinEof || _stdinQueue.length === 0) return null;
@@ -106,9 +218,13 @@ define('tcl/wacl', function () {
   };
 
   Module['postRun'] = function () {
-    _getInterp = Module.cwrap('Wacl_GetInterp', 'number', []);
-    _eval = Module.cwrap('Tcl_Eval', 'number', ['number', 'string']);
-    _getStringResult = Module.cwrap('Tcl_GetStringResult', 'string', ['number']);
+    _getInterp         = Module.cwrap('Wacl_GetInterp',                'number', []);
+    _eval              = Module.cwrap('Tcl_Eval',                      'number', ['number', 'string']);
+    _getStringResult   = Module.cwrap('Tcl_GetStringResult',           'string', ['number']);
+    _setJsResult       = Module.cwrap('Wacl_SetJsResultString',          null,   ['string']);
+    _appendErrorCodeEl = Module.cwrap('Wacl_AppendJsErrorCodeElement',   null,   ['string']);
+    _registerJsFn      = Module.cwrap('Wacl_RegisterJsFn',             'number', ['string', 'number']);
+    _revokeJsFn        = Module.cwrap('Wacl_RevokeJsFn',               'number', ['string']);
     _Interp = _getInterp();
 
     _Result = {
@@ -133,20 +249,33 @@ define('tcl/wacl', function () {
 
       get interp() { return _Interp; },
 
-      str2ptr: function (strObj) {
-        return Module.allocate(
-          Module.intArrayFromString(strObj),
-          'i8',
-          Module.ALLOC_NORMAL);
-      },
-
-      ptr2str: function (strPtr) {
-        return Module.UTF8ToString(strPtr);
-      },
-
-      jswrap: function (fcn, returnType, argType) {
-        var fnPtr = Runtime.addFunction(fcn);
-        return '::wacl::jscall ' + fnPtr + ' ' + returnType + ' ' + argType;
+      // JS function registry. See the top-of-file comment for the protocol.
+      // register replaces any prior binding under the same name; revoke is
+      // safe to call for names that aren't registered. names() returns the
+      // currently-granted names as a JS array.
+      js: {
+        register: function (name, fn) {
+          if (typeof name !== 'string')   throw new TypeError('register: name must be a string');
+          if (typeof fn   !== 'function') throw new TypeError('register: fn must be a function');
+          if (_jsTableMap[name] !== undefined) {
+            _revokeJsFn(name);
+            Module.removeFunction(_jsTableMap[name]);
+            delete _jsTableMap[name];
+          }
+          var fnPtr = Module.addFunction(_makeJsShim(fn), 'iii');
+          _jsTableMap[name] = fnPtr;
+          _registerJsFn(name, fnPtr);
+        },
+        revoke: function (name) {
+          _revokeJsFn(name);
+          if (_jsTableMap[name] !== undefined) {
+            Module.removeFunction(_jsTableMap[name]);
+            delete _jsTableMap[name];
+          }
+        },
+        names: function () {
+          return Object.keys(_jsTableMap);
+        }
       },
 
       // The thinnest sensible wrapper around Tcl_EvalEx: pass the script,

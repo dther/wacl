@@ -1,215 +1,229 @@
 #include <tcl.h>
 #include <string.h>
-#include <stdarg.h>
+#include <stdint.h>
 #include <emscripten.h>
 
-static const char* _valTypes[] = {
-    "void",
-    "array",
-    "string", 
-    "int", 
-    "double", 
-    "bool",
-    (const char*)NULL
-};
+#include "wacl.h"
 
-enum _valTypesEnum
+/*
+ * Wacl's JS bridge.
+ *
+ * The page (JS side) registers JS functions by name; the inner interp calls
+ * them as `::wacl::js::call NAME ARGS`. Conventions:
+ *
+ *   - ARGS is a Tcl list. Its elements are handed to the JS function as a
+ *     JS array of strings. Argument count and type checking happen on the
+ *     JS side; the C bridge stays type-blind.
+ *   - The JS function returns either a bare value (becomes the Tcl result
+ *     with TCL_OK), a [status, value] pair, or throws an Error (TCL_ERROR
+ *     with the message). The five-name status convention (`ok`, `error`,
+ *     `return`, `break`, `continue`), numeric codes, and errorCode-list
+ *     handling all live in the JS shim — by the time we hear about a
+ *     result on this side it is already a numeric return code plus a
+ *     value string plus (optionally) an errorCode list.
+ *   - Communication of the value/errorCode happens via a side channel the
+ *     shim fills before returning. The function's own return value is the
+ *     Tcl status code as an int.
+ *
+ * Registry: name → function-table index. JS hands us an Emscripten table
+ * index (from Module.addFunction); we stash it in a hash. There is no
+ * Tcl-side `register`. The host grants what the inner interp may call,
+ * then optionally revokes capabilities (`eval` being the obvious one)
+ * before running untrusted code — the polite-guest model.
+ */
+
+typedef int (*WaclJsFn)(int argc, const char **argv);
+
+static Tcl_HashTable waclJsRegistry;
+static int           waclJsRegistryInited = 0;
+
+/* Result side channel — written by the JS shim, read by JsCallCmd. */
+static Tcl_Obj *waclJsResultValue     = NULL;  /* owned ref, or NULL */
+static Tcl_Obj *waclJsResultErrorCode = NULL;  /* owned ref, or NULL */
+
+static void
+waclJsResetResult(void)
 {
-    EMTCL_VOID,
-    EMTCL_ARRAY,
-    EMTCL_STRING,
-    EMTCL_INT,
-    EMTCL_DOUBLE,
-    EMTCL_BOOL
-};
-
-
-static int 
-DomCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
-{
-	char *argsHelp = "attr|css selector key val";
-	if (objc != 5) {
-		Tcl_WrongNumArgs(interp, 1, objv, argsHelp);
-		return TCL_ERROR;
-	}
-
-	const char *action   = Tcl_GetString(objv[1]);
-	const char *selector = Tcl_GetString(objv[2]);
-	const char *key      = Tcl_GetString(objv[3]);
-	const char *val      = Tcl_GetString(objv[4]);
-
-	Tcl_Obj *res;
-
-	if (strcmp(action, "attr") != 0 && strcmp(action, "css") != 0) {
-		res = Tcl_NewStringObj("Action must be attr or css", -1);
-		Tcl_SetObjResult(interp, res);
-		return TCL_ERROR;
-	}
-
-	// TODO: always catch errors
-	int numChanged = EM_ASM_INT({
-		var action   = Pointer_stringify($0);
-		    selector = Pointer_stringify($1);
-		    key      = Pointer_stringify($2);
-		    val      = Pointer_stringify($3);
-		var elts = document.querySelectorAll(selector);
-		for (var i = 0; i < elts.length; i++) {
-			if (action === "attr") {
-				elts[i][key] = val;
-			} else {
-				elts[i].style[key] = val;
-			}
-		}
-		return elts.length;
-	}, action, selector, key, val);
-
-	res = Tcl_NewIntObj(numChanged);
-	Tcl_SetObjResult(interp, res);
-	return TCL_OK;
+    if (waclJsResultValue != NULL) {
+        Tcl_DecrRefCount(waclJsResultValue);
+        waclJsResultValue = NULL;
+    }
+    if (waclJsResultErrorCode != NULL) {
+        Tcl_DecrRefCount(waclJsResultErrorCode);
+        waclJsResultErrorCode = NULL;
+    }
 }
 
-#define EXPAND_FCN_CAST_CALL(R, X, ...) \
-R (*fcn)(__VA_ARGS__) = ( R (*)(__VA_ARGS__))fcnPtr;\
-R result;\
-X
-
-#define EXPAND_FCN_RET_TYPE(X, ...) \
-switch (retTypeN)\
-  {\
-  case EMTCL_VOID:\
-  {\
-      EXPAND_FCN_CAST_CALL(int,X,__VA_ARGS__)\
-      break;\
-  }\
-  case EMTCL_INT: case EMTCL_BOOL:\
-  {\
-      EXPAND_FCN_CAST_CALL(int,X,__VA_ARGS__)\
-      Tcl_SetObjResult(interp, Tcl_NewIntObj(result));\
-      break;\
-  }\
-  case EMTCL_ARRAY:\
-  case EMTCL_STRING:\
-    {\
-      EXPAND_FCN_CAST_CALL(char*,X,__VA_ARGS__)\
-      Tcl_SetObjResult(interp, Tcl_NewStringObj(result, -1));\
-      break;\
-    }\
-  case EMTCL_DOUBLE:\
-    {\
-      EXPAND_FCN_CAST_CALL(double,X,__VA_ARGS__)\
-      Tcl_SetObjResult(interp, Tcl_NewDoubleObj(result));\
-      break;\
-    }\
-  default:\
-    break;\
-  }
-
-#define EXPAND_FCN_ARG_TYPE(X) \
-switch (argTypeN)\
-{\
-    case EMTCL_INT : case EMTCL_BOOL :\
-    {\
-      EXPAND_FCN_RET_TYPE(\
-        int val;\
-        Tcl_GetIntFromObj(interp, objv[4], &val);\
-        X\
-        , int\
-      )\
-      break;\
-    }\
-    case EMTCL_DOUBLE:\
-    {\
-      EXPAND_FCN_RET_TYPE(\
-        double val;\
-        Tcl_GetDoubleFromObj(interp, objv[4], &val);\
-        X\
-        , double\
-      )\
-      break;\
-    }\
-    case EMTCL_ARRAY: case EMTCL_STRING: default:\
-    {\
-      EXPAND_FCN_RET_TYPE(\
-        const char* val = Tcl_GetString(objv[4]);\
-        X\
-        ,const char*\
-      )\
-      break;\
-    }\
-  }
-
-
-static int 
-JsCallCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]) 
+void
+Wacl_SetJsResultString(const char *s)
 {
-    int fcnPtr, retTypeN, argTypeN;
+    if (waclJsResultValue != NULL) Tcl_DecrRefCount(waclJsResultValue);
+    waclJsResultValue = Tcl_NewStringObj(s ? s : "", -1);
+    Tcl_IncrRefCount(waclJsResultValue);
+}
 
-    if (objc < 4 || objc > 5)
-    {
-    Tcl_WrongNumArgs(
-                    interp, 
-                    1,
-                    objv, 
-                    "fcnPtr returnType argsTypes ?arg1 arg2 ...?");
-    return TCL_ERROR;
+void
+Wacl_AppendJsErrorCodeElement(const char *s)
+{
+    if (waclJsResultErrorCode == NULL) {
+        waclJsResultErrorCode = Tcl_NewListObj(0, NULL);
+        Tcl_IncrRefCount(waclJsResultErrorCode);
     }
+    Tcl_ListObjAppendElement(NULL, waclJsResultErrorCode,
+                             Tcl_NewStringObj(s ? s : "", -1));
+}
 
-    if (Tcl_GetIntFromObj(interp, objv[1], &fcnPtr) != TCL_OK)
-    {
-      Tcl_SetObjResult(interp, Tcl_NewStringObj("first argument must be a function pointer", -1));
-      return TCL_ERROR;
-    }
+int
+Wacl_RegisterJsFn(const char *name, int fnIdx)
+{
+    int isNew;
+    Tcl_HashEntry *e = Tcl_CreateHashEntry(&waclJsRegistry, name, &isNew);
+    Tcl_SetHashValue(e, (void *)(intptr_t) fnIdx);
+    return isNew;
+}
 
-    if (Tcl_GetIndexFromObj(interp, objv[2], _valTypes, "return type", TCL_EXACT, &retTypeN) != TCL_OK)
-    return TCL_ERROR;
+int
+Wacl_RevokeJsFn(const char *name)
+{
+    Tcl_HashEntry *e = Tcl_FindHashEntry(&waclJsRegistry, name);
+    if (e == NULL) return 0;
+    Tcl_DeleteHashEntry(e);
+    return 1;
+}
 
-    if (Tcl_GetIndexFromObj(interp, objv[3], _valTypes, "argument type", TCL_EXACT, &argTypeN) != TCL_OK)
-    return TCL_ERROR;
 
-    if (argTypeN != EMTCL_VOID && objc != 5)
-    {
-        Tcl_SetObjResult(interp, Tcl_NewStringObj("for void argument type there must be no argument", -1));
+static int
+JsCallCmd(ClientData clientData, Tcl_Interp *interp,
+          int objc, Tcl_Obj *const objv[])
+{
+    if (objc != 3) {
+        Tcl_WrongNumArgs(interp, 1, objv, "name argList");
         return TCL_ERROR;
     }
-    
-    if (argTypeN == EMTCL_VOID)
-    {
-        EXPAND_FCN_RET_TYPE( result = fcn(); )
+
+    const char *name = Tcl_GetString(objv[1]);
+    Tcl_HashEntry *e = Tcl_FindHashEntry(&waclJsRegistry, name);
+    if (e == NULL) {
+        Tcl_SetObjResult(interp, Tcl_ObjPrintf(
+            "no such JS function: \"%s\"", name));
+        Tcl_SetErrorCode(interp, "WACL", "JS", "NOTFOUND", (char *)NULL);
+        return TCL_ERROR;
     }
-    else
-    {
-        EXPAND_FCN_ARG_TYPE( result = fcn(val); )
+
+    Tcl_Size argcSz;
+    Tcl_Obj **argObjs;
+    if (Tcl_ListObjGetElements(interp, objv[2], &argcSz, &argObjs) != TCL_OK) {
+        return TCL_ERROR;
     }
-    
+    int argc = (int) argcSz;
+
+    const char **argv = NULL;
+    if (argc > 0) {
+        argv = (const char **) Tcl_Alloc(argc * sizeof(char *));
+        for (int i = 0; i < argc; i++) {
+            argv[i] = Tcl_GetString(argObjs[i]);
+        }
+    }
+
+    waclJsResetResult();
+    WaclJsFn fn = (WaclJsFn)(intptr_t) Tcl_GetHashValue(e);
+    int rc = fn(argc, argv);
+
+    if (argv != NULL) Tcl_Free((void *) argv);
+
+    if (waclJsResultValue != NULL) {
+        Tcl_SetObjResult(interp, waclJsResultValue);
+    } else {
+        Tcl_ResetResult(interp);
+    }
+    if (rc != TCL_OK && waclJsResultErrorCode != NULL) {
+        Tcl_SetObjErrorCode(interp, waclJsResultErrorCode);
+    }
+    return rc;
+}
+
+static int
+JsNamesCmd(ClientData clientData, Tcl_Interp *interp,
+           int objc, Tcl_Obj *const objv[])
+{
+    if (objc != 1) {
+        Tcl_WrongNumArgs(interp, 1, objv, NULL);
+        return TCL_ERROR;
+    }
+    Tcl_Obj *result = Tcl_NewListObj(0, NULL);
+    Tcl_HashSearch search;
+    for (Tcl_HashEntry *e = Tcl_FirstHashEntry(&waclJsRegistry, &search);
+         e != NULL;
+         e = Tcl_NextHashEntry(&search)) {
+        Tcl_ListObjAppendElement(NULL, result,
+            Tcl_NewStringObj((const char *) Tcl_GetHashKey(&waclJsRegistry, e), -1));
+    }
+    Tcl_SetObjResult(interp, result);
     return TCL_OK;
 }
 
 
-static void
-WaclDeleteNamespace(ClientData clientData)
+/*
+ * ::wacl::dom attr|css selector key value
+ *
+ * The pre-tDom DOM op. Kept as-is for now; will be retired once tDom is
+ * brought in and the equivalent ops are exposed as registered JS functions
+ * scoped to a chosen root node.
+ */
+static int
+DomCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 {
+    if (objc != 5) {
+        Tcl_WrongNumArgs(interp, 1, objv, "attr|css selector key val");
+        return TCL_ERROR;
+    }
+
+    const char *action   = Tcl_GetString(objv[1]);
+    const char *selector = Tcl_GetString(objv[2]);
+    const char *key      = Tcl_GetString(objv[3]);
+    const char *val      = Tcl_GetString(objv[4]);
+
+    if (strcmp(action, "attr") != 0 && strcmp(action, "css") != 0) {
+        Tcl_SetObjResult(interp, Tcl_NewStringObj("Action must be attr or css", -1));
+        return TCL_ERROR;
+    }
+
+    int numChanged = EM_ASM_INT({
+        var action   = UTF8ToString($0);
+        var selector = UTF8ToString($1);
+        var key      = UTF8ToString($2);
+        var val      = UTF8ToString($3);
+        var elts = document.querySelectorAll(selector);
+        for (var i = 0; i < elts.length; i++) {
+            if (action === "attr") {
+                elts[i][key] = val;
+            } else {
+                elts[i].style[key] = val;
+            }
+        }
+        return elts.length;
+    }, action, selector, key, val);
+
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(numChanged));
+    return TCL_OK;
 }
 
-int
-Wacl_Init(Tcl_Interp* interp)
-{
-    Tcl_Namespace* waclNs = NULL;
-    
-    /* commands initialization */
-    waclNs = Tcl_CreateNamespace(interp, "::wacl", NULL, WaclDeleteNamespace);
-    Tcl_CreateObjCommand(interp, 
-                         "::wacl::dom", 
-                         DomCmd, 
-                         (ClientData) NULL, 
-                         (Tcl_CmdDeleteProc *) NULL);
-    Tcl_CreateObjCommand(interp, 
-                         "::wacl::jscall", 
-                         JsCallCmd, 
-                         (ClientData) NULL, 
-                         (Tcl_CmdDeleteProc *) NULL);
 
-    Tcl_Export(interp, waclNs, "dom", 0);
-    Tcl_Export(interp, waclNs, "jscall", 0);
+int
+Wacl_Init(Tcl_Interp *interp)
+{
+    if (!waclJsRegistryInited) {
+        Tcl_InitHashTable(&waclJsRegistry, TCL_STRING_KEYS);
+        waclJsRegistryInited = 1;
+    }
+
+    Tcl_CreateNamespace(interp, "::wacl",     NULL, NULL);
+    Tcl_CreateNamespace(interp, "::wacl::js", NULL, NULL);
+
+    Tcl_CreateObjCommand(interp, "::wacl::dom",       DomCmd,     NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::wacl::js::call",  JsCallCmd,  NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::wacl::js::names", JsNamesCmd, NULL, NULL);
+
     Tcl_PkgProvide(interp, "wacl", "1.0.0");
     return TCL_OK;
 }

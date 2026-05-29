@@ -261,13 +261,36 @@ require(["tcl/wacl"], function (wacl) {
     interp.stdout = (text) => term.write(text);
     interp.stderr = (text) => term.writeErr(text);
 
+    // Grant a couple of JS functions to the inner Tcl interp. The host
+    // decides what the inner interp can reach into; nothing JS-side is
+    // visible by default. `eval` here is the obvious foot-gun and the
+    // intended use of the registry — the bootstrap-then-seal pattern is
+    // to grant it, run a Tcl-side init that wires up everything domain
+    // specific, then `interp.js.revoke("eval")` before user input lands.
+    //   ::wacl::js::call alert {hello world}
+    //   ::wacl::js::call eval  {Math.PI}
+    //   ::wacl::js::names
+    interp.js.register("alert", function (args) {
+      window.alert(args.join(" "));
+    });
+    interp.js.register("eval", function (args) {
+      var r = (0, eval)(args[0]);
+      if (r === undefined) return "";
+      if (typeof r === "object") return JSON.stringify(r);
+      return String(r);
+    });
+
     term.write("wacl — Tcl " + interp.Eval("info patchlevel") + "\n");
-    term.write("type tcl. enter submits, shift+enter for a newline.\n\n");
+    term.write("type tcl. enter submits, shift+enter for a newline.\n");
+    term.write("JS bridge: ::wacl::js::call NAME ARGLIST; granted: " +
+               interp.Eval("::wacl::js::names") + "\n\n");
     term.focus();
 
     // Debug hooks for poking from the JS console. Try:
     //   __interp.Eval("expr {2+2}")
     //   __interp.pushStdin("hello\n"); __interp.Eval("gets stdin")
+    //   __interp.js.register("ping", a => "pong:" + a.join(","))
+    //   __interp.Eval("::wacl::js::call ping {one two three}")
     window.__interp = interp;
     window.__wacl = wacl;
   });

@@ -21,7 +21,9 @@ BCFLAGS ?= -Oz -s WASM=1
 
 WASMFLAGS_MINIMAL = \
     --pre-js preGeneratedJs.js --post-js js/postJsRequire.js $(BCFLAGS) \
-    -s FORCE_FILESYSTEM=1 -s EXPORTED_RUNTIME_METHODS='["cwrap","FS"]' \
+    -s FORCE_FILESYSTEM=1 \
+    -s ALLOW_TABLE_GROWTH=1 \
+    -s EXPORTED_RUNTIME_METHODS='["cwrap","FS","addFunction","removeFunction","getValue","UTF8ToString"]' \
     --embed-file tcl/unix/libtcl9.0.3.zip@/lib/tcl.zip
 
 WACLEXPORTS = \
@@ -29,7 +31,11 @@ WACLEXPORTS = \
         '_main',\
         '_Wacl_GetInterp',\
         '_Tcl_Eval',\
-        '_Tcl_GetStringResult'\
+        '_Tcl_GetStringResult',\
+        '_Wacl_RegisterJsFn',\
+        '_Wacl_RevokeJsFn',\
+        '_Wacl_SetJsResultString',\
+        '_Wacl_AppendJsErrorCodeElement'\
     ]"
 
 WACLCC = \
