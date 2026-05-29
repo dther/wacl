@@ -264,6 +264,12 @@ require(["tcl/wacl"], function (wacl) {
     term.write("wacl — Tcl " + interp.Eval("info patchlevel") + "\n");
     term.write("type tcl. enter submits, shift+enter for a newline.\n\n");
     term.focus();
+
+    // Debug hooks for poking from the JS console. Try:
+    //   __interp.Eval("expr {2+2}")
+    //   __interp.pushStdin("hello\n"); __interp.Eval("gets stdin")
+    window.__interp = interp;
+    window.__wacl = wacl;
   });
 });
 </script>
