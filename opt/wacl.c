@@ -220,12 +220,34 @@ Wacl_Init(Tcl_Interp* interp)
  * former expands to Tcl_EvalEx, the latter to Tcl_GetString of the obj
  * result). The wacl JS bridge cwraps them by name, so we provide thin
  * wrappers under the original names — #undef the macros first.
+ *
+ * The Tcl_Eval wrapper also fences re-entrant calls from JS. JS is
+ * single-threaded so timers/promises can't produce concurrent Eval
+ * calls, but a synchronous chain — JS Eval -> Tcl puts -> FS.init
+ * output sink -> JS Eval — IS possible and would have the two frames
+ * share one interpreter's result, errorInfo, and package init state.
+ * Tcl handles nested evaluation fine when *Tcl* drives it (after,
+ * fileevent, command callbacks all go through Tcl_DoOneEvent /
+ * Tcl_EvalObjEx, not through our wrapper); only the JS-imposed flavour
+ * needs to be refused. The idiomatic workaround on the caller's side
+ * is `after 0 [list ...]`, which queues the inner script to run when
+ * the current evaluation stack unwinds.
  */
 #undef Tcl_Eval
+static int waclEvalDepth = 0;
 int
 Tcl_Eval(Tcl_Interp *interp, const char *script)
 {
-    return Tcl_EvalEx(interp, script, TCL_INDEX_NONE, 0);
+    if (waclEvalDepth > 0) {
+        Tcl_SetObjResult(interp, Tcl_NewStringObj(
+            "wacl: re-entrant Tcl_Eval from JS is not supported; "
+            "queue the call with `after 0 [list ...]` instead", -1));
+        return TCL_ERROR;
+    }
+    waclEvalDepth++;
+    int rc = Tcl_EvalEx(interp, script, TCL_INDEX_NONE, 0);
+    waclEvalDepth--;
+    return rc;
 }
 
 #undef Tcl_GetStringResult
