@@ -36,10 +36,17 @@ body {
 }
 
 /* The app is a CSS grid. Header on top, sandbox and editor side-by-side,
-   examples ribbon at the bottom. Resize-friendly down to about 800px wide. */
+   examples ribbon at the bottom. Resize-friendly down to about 800px wide.
+
+   The middle row uses `minmax(0, 1fr)` rather than the obvious `1fr`
+   because CSS Grid's default minimum track size is `auto` (the min-
+   content of the row's items), not 0. Without the explicit `0` floor,
+   the output <pre> filling up would push the row past the viewport and
+   shove the Run button off the bottom of the page. Same trick applies
+   nested below in `.right`. */
 .app {
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   grid-template-columns: 1fr 1fr;
   grid-template-areas:
     "header header"
@@ -151,12 +158,16 @@ header a:hover { color: var(--accent); }
 }
 .tasks li:hover { background: var(--edge); }
 
-/* Right column: editor on top, controls in the middle, output below. */
+/* Right column: editor on top, controls in the middle, output below.
+   The min-height: 0 here is belt-and-suspenders to the minmax(0,1fr)
+   on .app — together they guarantee .right is bounded by its grid
+   row no matter what's inside. */
 .right {
   grid-area: right;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
   background: var(--panel);
+  min-height: 0;
 }
 
 .editor {
