@@ -449,6 +449,17 @@ puts "16 cards now respond to clicks"` },
 set t [clock format [clock seconds] -format %H:%M:%S]
 wacl::dom append "#tasks" "<li>noted at $t</li>"` },
 
+  { name: "insert all four", script:
+`# All four insertAdjacentHTML positions, around #tasks.
+# before  -> previous sibling (needs a parent)
+# prepend -> first child
+# append  -> last child
+# after   -> next sibling (needs a parent)
+wacl::dom before  "#tasks" "<h3 style='color:var(--accent);margin:0.5rem 0 0'>Today</h3>"
+wacl::dom prepend "#tasks" "<li class='done'>★ pinned to top</li>"
+wacl::dom append  "#tasks" "<li>tacked on at end</li>"
+wacl::dom after   "#tasks" "<p style='color:var(--muted);margin:0.25rem 0'>(noted via wacl::dom after)</p>"` },
+
   { name: "strike tasks", script:
 `# Make existing tasks toggle their done state on click.
 wacl::dom each "#tasks > li" {

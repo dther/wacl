@@ -335,7 +335,10 @@ already loaded keep working.
         wacl::dom call  SEL METHOD ?ARG ...?  -> string
         wacl::dom html  SEL ?HTML?            -> string | void
         wacl::dom text  SEL ?TEXT?            -> string | void
-        wacl::dom append SEL HTML
+        wacl::dom before SEL HTML             -> void
+        wacl::dom prepend SEL HTML            -> void
+        wacl::dom append SEL HTML             -> void
+        wacl::dom after  SEL HTML             -> void
         wacl::dom remove SEL
         wacl::dom each   SEL BODY             -> count
     `prop`, `call`, `event` all accept JS-style dot-paths

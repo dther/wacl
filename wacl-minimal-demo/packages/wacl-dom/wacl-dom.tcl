@@ -56,8 +56,22 @@
 #       Get/set textContent. Safe for untrusted data; the browser
 #       handles all escaping.
 #
-#   wacl::dom append SEL HTML
-#       insertAdjacentHTML(beforeend, …). Same XSS surface as `html`.
+#   wacl::dom before  SEL HTML
+#       insertAdjacentHTML(beforebegin, …). Inserts HTML *before* the
+#       element itself, as a previous sibling. Requires SEL to have
+#       a parent.
+#
+#   wacl::dom prepend SEL HTML
+#       insertAdjacentHTML(afterbegin, …). Inserts HTML as the first
+#       child of SEL. Same XSS surface as `html`.
+#
+#   wacl::dom append  SEL HTML
+#       insertAdjacentHTML(beforeend, …). Inserts HTML as the last
+#       child of SEL. Same XSS surface as `html`.
+#
+#   wacl::dom after   SEL HTML
+#       insertAdjacentHTML(afterend, …). Inserts HTML *after* the
+#       element, as a next sibling. Requires SEL to have a parent.
 #
 #   wacl::dom remove SEL
 #       elt.remove().
@@ -85,7 +99,8 @@ if {[lsearch -exact [::wacl::js::names] eval] < 0} {
 
 namespace eval ::wacl::dom {
     namespace export bind unbind event \
-                     prop style call html text append remove each
+                     prop style call html text \
+                     before prepend append after remove each
     namespace ensemble create
 }
 
@@ -283,11 +298,15 @@ namespace eval ::wacl::dom {
         }
     });
 
-    wacl.js.register("__wacl_dom_append", function (args) {
+    // One primitive backing before / prepend / append / after.
+    // Position is one of "beforebegin", "afterbegin", "beforeend",
+    // "afterend" — the standard insertAdjacentHTML positions. The
+    // Tcl-side procs pick the right one for their name.
+    wacl.js.register("__wacl_dom_insert", function (args) {
         var D = globalThis.__waclDom;
         try {
             var elt = D.resolveSel(args[0]);
-            elt.insertAdjacentHTML("beforeend", args[1]);
+            elt.insertAdjacentHTML(args[1], args[2]);
             return "";
         } catch (e) {
             if (e.__waclCode) return [e.__waclCode, e.message];
@@ -400,8 +419,20 @@ proc ::wacl::dom::text {sel args} {
     }
 }
 
+proc ::wacl::dom::before {sel html} {
+    ::wacl::js::call __wacl_dom_insert $sel beforebegin $html
+}
+
+proc ::wacl::dom::prepend {sel html} {
+    ::wacl::js::call __wacl_dom_insert $sel afterbegin $html
+}
+
 proc ::wacl::dom::append {sel html} {
-    ::wacl::js::call __wacl_dom_append $sel $html
+    ::wacl::js::call __wacl_dom_insert $sel beforeend $html
+}
+
+proc ::wacl::dom::after {sel html} {
+    ::wacl::js::call __wacl_dom_insert $sel afterend $html
 }
 
 proc ::wacl::dom::remove {sel} {
