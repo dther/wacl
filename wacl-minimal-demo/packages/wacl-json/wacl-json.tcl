@@ -6,9 +6,19 @@
 #   ::wacl::json get $blob ?key ...?
 #       Returns the value at the given path. Object keys are strings,
 #       array indices are numeric (string form — Tcl convention).
-#       Missing fields, null, and undefined all return the empty string.
-#       If the value at the path is itself an object or array, it comes
-#       back as a JSON string so you can recurse with another `get`.
+#       null returns the empty string. If the value at the path is
+#       itself an object or array, it comes back as a JSON string so
+#       you can recurse with another `get`. Missing paths throw
+#       TCL_ERROR with errorCode {JSON BAD_PATH}.
+#
+#   ::wacl::json extract $blob ?key ...?
+#       Like `get`, but returns the value as a JSON fragment — quoted
+#       strings stay quoted, booleans stay bare, null stays bare.
+#       The disambiguation lever for cases where `get` collapses (say)
+#       the JSON string "true" and the boolean true to the same Tcl
+#       representation. Mirrors rl_json's read-side disambiguator;
+#       the same precedent will apply for any future typed-write
+#       commands.
 #
 #   ::wacl::json exists $blob ?key ...?
 #       1 if the path is present (even if the value is null), 0 otherwise.
@@ -36,7 +46,7 @@ if {[lsearch -exact [::wacl::js::names] eval] < 0} {
 }
 
 namespace eval ::wacl::json {
-    namespace export get exists
+    namespace export get extract exists
     namespace ensemble create
 }
 
@@ -48,8 +58,10 @@ namespace eval ::wacl::json {
         try { cur = JSON.parse(blob); }
         catch (e) { return [["JSON", "PARSE"], "json::get: " + e.message]; }
         for (var i = 0; i < path.length; i++) {
-            if (cur === undefined || !(path[i] in cur))
-                    return [["JSON", "BAD_PATH"], "json::get: " + e.message];
+            if (cur === null || typeof cur !== "object" || !(path[i] in cur)) {
+                return [["JSON", "BAD_PATH"],
+                        "json::get: no such path: " + JSON.stringify(path.slice(0, i + 1))];
+            }
             cur = cur[path[i]];
         }
         if (cur === null) return "";
@@ -63,8 +75,10 @@ namespace eval ::wacl::json {
         try { cur = JSON.parse(blob); }
         catch (e) { return [["JSON", "PARSE"], "json::extract: " + e.message]; }
         for (var i = 0; i < path.length; i++) {
-            if (cur === undefined || !(path[i] in cur))
-                    return [["JSON", "BAD_PATH"], "json::extract: " + e.message];
+            if (cur === null || typeof cur !== "object" || !(path[i] in cur)) {
+                return [["JSON", "BAD_PATH"],
+                        "json::extract: no such path: " + JSON.stringify(path.slice(0, i + 1))];
+            }
             cur = cur[path[i]];
         }
         return JSON.stringify(cur);
