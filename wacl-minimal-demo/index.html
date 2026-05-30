@@ -223,8 +223,13 @@ function WaclTerminal({ mount, prompt = "% ", onLine = () => {} }) {
   });
 
   // Clicking anywhere in the terminal focuses the input — saves the user
-  // from hunting for a cursor. We don't steal focus mid-selection though.
-  mount.addEventListener("mousedown", (e) => {
+  // from hunting for a cursor. We listen on mouseup, not mousedown: at
+  // mousedown the user might be starting a drag-select, and the selection
+  // is still empty (it grows on subsequent mousemoves). Focusing the input
+  // from there clears the half-formed selection and the user can never
+  // copy anything out. Mouseup fires after the drag completes, so a real
+  // selection is already in place and our check honors it.
+  mount.addEventListener("mouseup", (e) => {
     if (window.getSelection().toString() === "" && e.target !== input) {
       setTimeout(() => input.focus(), 0);
     }

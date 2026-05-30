@@ -157,6 +157,35 @@ JsNamesCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_OK;
 }
 
+/* ::wacl::js::revoke NAME — remove an entry from the JS registry.
+ *
+ * Tcl can revoke but not register: revoke is voluntarily declining a
+ * privilege the host granted, register would be expanding privilege.
+ * A polite guest can do the former, never the latter. This is the
+ * Tcl-side seal — bootstrap requires what it wants, then revokes
+ * `eval` (and anything else broad) before user input lands.
+ *
+ * The C side just removes the hash entry. The JS-side `wacl.js.revoke`
+ * additionally frees the Emscripten function-table slot via
+ * removeFunction; revoking from Tcl leaves the slot allocated until
+ * either the page reloads or someone re-registers the same name
+ * (which fires the JS-side cleanup path). Small live-only cost, never
+ * a real leak.
+ */
+static int
+JsRevokeCmd(ClientData clientData, Tcl_Interp *interp,
+            int objc, Tcl_Obj *const objv[])
+{
+    if (objc != 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "name");
+        return TCL_ERROR;
+    }
+    const char *name = Tcl_GetString(objv[1]);
+    int removed = Wacl_RevokeJsFn(name);
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(removed));
+    return TCL_OK;
+}
+
 
 /*
  * ::wacl::dom attr|css selector key value
@@ -215,9 +244,10 @@ Wacl_Init(Tcl_Interp *interp)
     Tcl_CreateNamespace(interp, "::wacl",     NULL, NULL);
     Tcl_CreateNamespace(interp, "::wacl::js", NULL, NULL);
 
-    Tcl_CreateObjCommand(interp, "::wacl::dom",       DomCmd,     NULL, NULL);
-    Tcl_CreateObjCommand(interp, "::wacl::js::call",  JsCallCmd,  NULL, NULL);
-    Tcl_CreateObjCommand(interp, "::wacl::js::names", JsNamesCmd, NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::wacl::dom",        DomCmd,      NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::wacl::js::call",   JsCallCmd,   NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::wacl::js::names",  JsNamesCmd,  NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::wacl::js::revoke", JsRevokeCmd, NULL, NULL);
 
     Tcl_PkgProvide(interp, "wacl", "1.0.0");
     return TCL_OK;

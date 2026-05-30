@@ -181,10 +181,15 @@ registry the host fills explicitly.
   Tcl side:
     ::wacl::js::call NAME ?ARG ...?   // varargs; JS sees a string[]
     ::wacl::js::names                 // Tcl list of registered names
+    ::wacl::js::revoke NAME           // voluntarily decline a grant
 
 There is no Tcl-side `register`. The host grants what the inner
-interp may call; the inner interp can introspect but not extend the
-registry. SurfTcl is a polite guest.
+interp may call; the inner interp can introspect, invoke, and
+voluntarily relinquish — but never *expand* — the registry.
+`revoke` is the Tcl-side seal: a bootstrap script does its
+`package require`s, wires whatever surface it wants, then revokes
+`eval` (and anything else broad) before user input lands. A polite
+guest can decline what it was offered; only the host can offer.
 
 **Argument convention.** All args after NAME are passed varargs-style
 and arrive on the JS side as one array of strings. To pass an existing
