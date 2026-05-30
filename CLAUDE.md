@@ -322,16 +322,35 @@ already loaded keep working.
     isn't. Escape via `::wacl::js::call eval {JSON.stringify(…)}`
     until a proper Tcl-side builder exists.
 
-  - **wacl::dom** — `wacl::dom bind SELECTOR EVENT SCRIPT` /
-    `wacl::dom unbind HANDLE` / `wacl::dom event FIELD`. Composes
-    via `addEventListener` (no interference with other listeners).
-    Inside the handler, `[wacl::dom event clientX]`,
-    `[wacl::dom event target.id]` etc. do lazy dot-path lookup on
-    the currently-dispatched event — chosen over Tk-style %-subs
-    so the package doesn't have to pre-decide which fields to
-    expose. The eval-fence does **not** trip: DOM events fire from
-    the JS event loop between Tcl_Eval calls, not synchronously
-    inside one.
+  - **wacl::dom** — events plus DOM manipulation, consistently "trust
+    JS to be JS." Selectors are standard CSS resolved through
+    `document.querySelector`; the special selector `:this` refers to
+    the currently-iterated element inside `wacl::dom each`.
+    Surface:
+        wacl::dom bind SEL EVENT SCRIPT       -> handle
+        wacl::dom unbind HANDLE
+        wacl::dom event FIELD                 -> string
+        wacl::dom prop  SEL PATH ?VALUE?      -> string | void
+        wacl::dom style SEL CSSPROP ?VALUE?   -> string | void
+        wacl::dom call  SEL METHOD ?ARG ...?  -> string
+        wacl::dom html  SEL ?HTML?            -> string | void
+        wacl::dom text  SEL ?TEXT?            -> string | void
+        wacl::dom append SEL HTML
+        wacl::dom remove SEL
+        wacl::dom each   SEL BODY             -> count
+    `prop`, `call`, `event` all accept JS-style dot-paths
+    (`target.id`, `classList.add`, `dataset.userId`, …). `style`
+    accepts CSS-hyphenated or camelCase via getProperty/setProperty.
+    `html` and `append` are not sanitised — same XSS surface as
+    setting innerHTML directly; use `text` for untrusted data.
+    `each` is driven from Tcl-side so each step is its own Tcl_Eval
+    frame on the JS side — the eval-fence stays out of the way, and
+    `break`/`continue`/`return` from the body work normally.
+    Nested `each` is supported; the currentElement is stacked.
+    Composes via `addEventListener` (no interference with other
+    listeners). The eval-fence does **not** trip on real DOM events:
+    they fire from the JS event loop between Tcl_Eval calls, not
+    synchronously inside one.
 
   - **wacl::chan** — `set ch [wacl::chan open NAME]` returns a Tcl
     reflected channel (`chan create`), bidirectional and binary.
