@@ -46,7 +46,7 @@ namespace eval ::wacl::dom {
     }
     var D = globalThis.__waclDom;
 
-    __interp.js.register("__wacl_dom_bind", function (args) {
+    wacl.js.register("__wacl_dom_bind", function (args) {
         var selector = args[0], evType = args[1], script = args[2];
         var elt = document.querySelector(selector);
         if (!elt) return [["WACL", "DOM", "NOMATCH"], "no element matches " + selector];
@@ -55,9 +55,9 @@ namespace eval ::wacl::dom {
             var prev = D.currentEvent;
             D.currentEvent = e;
             try {
-                __interp.Eval(script);
+                wacl.Eval(script);
             } catch (err) {
-                console.error("wacl::dom handler error:", err);
+                wacl.onError("dom handler (" + evType + " on " + selector + ")", err);
             } finally {
                 D.currentEvent = prev;
             }
@@ -67,7 +67,7 @@ namespace eval ::wacl::dom {
         return handle;
     });
 
-    __interp.js.register("__wacl_dom_unbind", function (args) {
+    wacl.js.register("__wacl_dom_unbind", function (args) {
         var b = D.bindings[args[0]];
         if (!b) return "";
         b.elt.removeEventListener(b.type, b.listener);
@@ -75,7 +75,7 @@ namespace eval ::wacl::dom {
         return "";
     });
 
-    __interp.js.register("__wacl_dom_event", function (args) {
+    wacl.js.register("__wacl_dom_event", function (args) {
         if (D.currentEvent === null) return "";
         var path = args[0].split(".");
         var cur = D.currentEvent;

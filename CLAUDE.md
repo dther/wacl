@@ -243,6 +243,52 @@ return) carry value and errorCode-list across the wasm boundary.
 The function's own integer return is the Tcl status code. C side
 in `opt/wacl.c`; JS side in `js/preJsRequire.js`.
 
+## Failure surface: `wacl.supportURL` and `wacl.onError`
+
+The floor is honesty, not an implicit white lie.
+
+`wacl.onError(context, error)` is the bridge's default error sink,
+invoked by the packages (and by anything else inside wacl that fails
+in a way the page should know about). The default implementation
+writes to stderr (visible in the terminal if wired, console.error
+otherwise) and fires an `alert()`. The alert text branches on whether
+`wacl.supportURL` is set:
+
+  - Set: "A fatal wacl error has occurred. Please report it via:
+    {supportURL} — Details: {context+message}"
+  - Not set: "A fatal wacl error has occurred but the developer has
+    not named a point of contact through wacl.supportURL. Details:
+    {context+message}"
+
+The unset branch is deliberate self-incrimination. Generic "please
+report this to the developer" is a white lie — it implies a path
+forward when there might not be one. By naming the omission, the
+default forces the developer into one of two right things:
+
+  1. Set `wacl.supportURL` to any contact pointer (URL, mailto:,
+     GitHub issues link, "tweet at @us") — strings, not validated.
+     The alert then names where to go.
+  2. Override `wacl.onError = function (context, error) { ... }` —
+     route errors anywhere (Sentry, an in-app toast, /dev/null).
+     Overriding IS the formal, in-code acceptance of responsibility.
+
+**Upstream-support stance.** Projects that ship the "developer has
+not named a point of contact" alert are unsupported by upstream
+until they do one of the two above. Both are easy. The default is
+calibrated so that the *only* way to be invisible is to actively
+take responsibility for being so.
+
+"Fatal" is the right descriptor even for recoverable one-shots: wacl
+doesn't know whether a failed handler put the application in a bad
+state, can't make that claim, so falls back on the developer — who,
+by not setting supportURL, has abdicated naming the recovery path.
+As far as the end user is concerned, that's fatal.
+
+The `wacl::dom` listener catch, the `wacl::chan` postevent/onData
+catches, and the wasm-instantiation failure all route through
+`wacl.onError` (or, for wasm instantiation, an inline version of
+the same shape — postRun hasn't fired yet at that point).
+
 ## Re-entrant Tcl_Eval fence
 
 `opt/wacl.c`'s `Tcl_Eval` wrapper (commit 15842e8) refuses
@@ -301,12 +347,15 @@ already loaded keep working.
     responses, WebSocket frames) dispatch into Tcl with all the
     normal event-loop machinery.
 
-**Bootstrap dependency.** Package shims hard-code `globalThis.__interp`
-as the wacl handle, because eval'd code runs in global scope and can't
-see closure variables from the handler that called `(0, eval)`. The
-demo sets `window.__interp = interp` *before* installing packages, so
-the first `package require` works. Pages that swap out the demo's
-bootstrap must keep this invariant.
+**Bootstrap dependency.** Package shims look up the wacl handle as
+`globalThis.wacl`, blessed in `preJsRequire.js`'s postRun via
+`Object.defineProperty(globalThis, "wacl", { value: _Result,
+writable: false, configurable: false })`. The binding is locked
+against accidental shadowing (a stray `var wacl = ...` at page scope
+would otherwise clobber it silently — JS gives no warning); the
+properties on the object stay mutable so `wacl.stdout = fn` etc.
+still work. `__interp` and `__wacl` remain on `window` as console
+aliases for shorter typing, but they're no longer load-bearing.
 
 **Layout.** `wacl-minimal-demo/packages/wacl-<name>/{pkgIndex.tcl,
 wacl-<name>.tcl}` — one main `.tcl` per package, code-as-documentation,

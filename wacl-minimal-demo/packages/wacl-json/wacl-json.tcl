@@ -41,7 +41,7 @@ namespace eval ::wacl::json {
 }
 
 ::wacl::js::call eval {
-    __interp.js.register("__wacl_json_get", function (args) {
+    wacl.js.register("__wacl_json_get", function (args) {
         var blob = args[0];
         var path = args.slice(1);
         var cur;
@@ -55,7 +55,7 @@ namespace eval ::wacl::json {
         if (typeof cur === "object") return JSON.stringify(cur);
         return String(cur);
     });
-    __interp.js.register("__wacl_json_exists", function (args) {
+    wacl.js.register("__wacl_json_exists", function (args) {
         var blob = args[0];
         var path = args.slice(1);
         var cur;

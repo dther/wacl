@@ -40,7 +40,7 @@
 #
 # The JS-side write defers its `chan postevent` via setTimeout(0). DOM
 # event handlers (and anything else that might call write inside an
-# ongoing __interp.Eval frame) would otherwise trip the re-entrant
+# ongoing wacl.Eval frame) would otherwise trip the re-entrant
 # Tcl_Eval fence; the setTimeout trampolines past the current Tcl
 # stack the same way `after 0 [list ...]` does Tcl-side.
 
@@ -112,10 +112,10 @@ namespace eval ::wacl::chan {
                                 rec.posted = false;
                                 if (rec.closed) return;
                                 try {
-                                    __interp.Eval(
+                                    wacl.Eval(
                                         "chan postevent " + rec.tclName + " read");
                                 } catch (e) {
-                                    console.error("chan postevent failed:", e);
+                                    wacl.onError("chan postevent", e);
                                 }
                             }, 0);
                         }
@@ -124,7 +124,7 @@ namespace eval ::wacl::chan {
                         if (rec.closed) return;
                         rec.closed = true;
                         setTimeout(function () {
-                            try { __interp.Eval("close " + rec.tclName); }
+                            try { wacl.Eval("close " + rec.tclName); }
                             catch (e) { /* may already be closed */ }
                         }, 0);
                     }
@@ -135,7 +135,7 @@ namespace eval ::wacl::chan {
     }
     var C = globalThis.__waclChan;
 
-    __interp.js.register("__wacl_chan_create", function (args) {
+    wacl.js.register("__wacl_chan_create", function (args) {
         var name = args[0];
         if (C.byName[name]) {
             return [["WACL", "CHAN", "EXISTS"], "channel already open: " + name];
@@ -157,7 +157,7 @@ namespace eval ::wacl::chan {
         return handle;
     });
 
-    __interp.js.register("__wacl_chan_attach", function (args) {
+    wacl.js.register("__wacl_chan_attach", function (args) {
         var handle = args[0], tclName = args[1];
         var rec = C.byName["__h_" + handle];
         if (!rec) return [["WACL", "CHAN", "NOHANDLE"], "no such chan handle"];
@@ -165,7 +165,7 @@ namespace eval ::wacl::chan {
         return "";
     });
 
-    __interp.js.register("__wacl_chan_close", function (args) {
+    wacl.js.register("__wacl_chan_close", function (args) {
         var rec = C.byName["__h_" + args[0]];
         if (!rec) return "";
         rec.closed = true;
@@ -174,7 +174,7 @@ namespace eval ::wacl::chan {
         return "";
     });
 
-    __interp.js.register("__wacl_chan_watch", function (args) {
+    wacl.js.register("__wacl_chan_watch", function (args) {
         var rec = C.byName["__h_" + args[0]];
         if (!rec) return "";
         rec.watching = (args[1].indexOf("read") >= 0);
@@ -185,14 +185,14 @@ namespace eval ::wacl::chan {
             setTimeout(function () {
                 rec.posted = false;
                 if (rec.closed) return;
-                try { __interp.Eval("chan postevent " + rec.tclName + " read"); }
-                catch (e) { console.error("chan postevent failed:", e); }
+                try { wacl.Eval("chan postevent " + rec.tclName + " read"); }
+                catch (e) { wacl.onError("chan postevent", e); }
             }, 0);
         }
         return "";
     });
 
-    __interp.js.register("__wacl_chan_read", function (args) {
+    wacl.js.register("__wacl_chan_read", function (args) {
         var rec = C.byName["__h_" + args[0]];
         var count = parseInt(args[1], 10);
         if (!rec || rec.pendingLen === 0) return "";
@@ -217,7 +217,7 @@ namespace eval ::wacl::chan {
                 setTimeout(function () {
                     rec.posted = false;
                     if (rec.closed) return;
-                    try { __interp.Eval("chan postevent " + rec.tclName + " read"); }
+                    try { wacl.Eval("chan postevent " + rec.tclName + " read"); }
                     catch (e) {}
                 }, 0);
             }
@@ -225,14 +225,14 @@ namespace eval ::wacl::chan {
         return C.bytesToStr(chunk);
     });
 
-    __interp.js.register("__wacl_chan_write", function (args) {
+    wacl.js.register("__wacl_chan_write", function (args) {
         var rec = C.byName["__h_" + args[0]];
         if (!rec) return [["WACL", "CHAN", "NOHANDLE"], "no such chan handle"];
         if (rec.closed) return [["WACL", "CHAN", "CLOSED"], "channel closed"];
         var bytes = C.strToBytes(args[1]);
         if (rec.onData) {
             try { rec.onData(bytes); }
-            catch (e) { console.error("wacl::chan onData error:", e); }
+            catch (e) { wacl.onError("chan onData", e); }
         }
         return String(bytes.length);
     });

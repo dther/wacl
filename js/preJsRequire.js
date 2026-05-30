@@ -211,7 +211,17 @@ define('tcl/wacl', function () {
         Module.testWasmInstantiationSucceeded = 1;
         successCallback(output.instance);
       }).catch(function (e) {
-        console.log('wasm instantiation failed! ' + e);
+        // wacl.onError doesn't exist yet (postRun hasn't fired), so inline
+        // the same shape — loud, named, honest. Nothing else can work after
+        // this fails, so this is exactly the kind of failure the policy is
+        // designed for.
+        var msg = "wasm instantiation failed: " + e;
+        _stderrSink(msg + "\n");
+        if (typeof alert === "function") {
+          alert("A fatal wacl error has occurred but the developer has not " +
+                "named a point of contact through wacl.supportURL.\n\n" +
+                "Details: " + msg);
+        }
       });
     });
     return {};
@@ -291,8 +301,57 @@ define('tcl/wacl', function () {
           throw new _TclException(rc, msg, trace);
         }
         return _getStringResult(this.interp);
+      },
+
+      // Failure surface. The floor is honesty, not an implicit white lie.
+      //
+      // The default onError handler fires three channels: stderr (visible
+      // in the terminal if wired, console.error otherwise), the JS console
+      // (implicit via stderr's fallback), and an alert() that names a
+      // contact point. If the page set `wacl.supportURL`, the alert tells
+      // the user where to report. If not, the alert confesses that the
+      // developer didn't name one — which is the truthful state of the
+      // world, and the kind of pressure that gets supportURL set.
+      //
+      // Pages can override `wacl.onError` to route errors anywhere they
+      // want (Sentry, an in-app toast, /dev/null). Overriding IS the
+      // acceptance of responsibility — the floor moves with the developer's
+      // explicit choice, never silently.
+      //
+      // Projects that ship the "developer has not named a point of
+      // contact" alert are unsupported by upstream until they either
+      // set supportURL or replace onError. Both are easy. The default
+      // is calibrated to make either choice obvious.
+      supportURL: null,
+
+      onError: function (context, error) {
+        var msg = "[" + context + "] " + ((error && error.message) || String(error));
+        _stderrSink("wacl error: " + msg + "\n");
+        if (typeof alert === "function") {
+          if (this.supportURL) {
+            alert("A fatal wacl error has occurred.\n\n" +
+                  "Please report it via: " + this.supportURL +
+                  "\n\nDetails: " + msg);
+          } else {
+            alert("A fatal wacl error has occurred but the developer " +
+                  "has not named a point of contact through " +
+                  "wacl.supportURL.\n\nDetails: " + msg);
+          }
+        }
       }
     };
+
+    // Bless the wacl handle as a global, defended against accidental
+    // shadowing (`var wacl = ...` at page scope would otherwise clobber
+    // it silently — JS has no warning for that, and a stray reassignment
+    // would break every package that looks the handle up by name).
+    // Properties on the object stay mutable; only the binding is locked.
+    Object.defineProperty(globalThis, "wacl", {
+      value: _Result,
+      writable: false,
+      configurable: false,
+      enumerable: true
+    });
 
     _OnReadyCb(_Result);
   };
