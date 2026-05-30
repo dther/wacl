@@ -142,22 +142,32 @@ namespace eval ::wacl::dom {
     wacl.js.register("__wacl_dom_bind", function (args) {
         var D = globalThis.__waclDom;
         var selector = args[0], evType = args[1], script = args[2];
-        var elt = document.querySelector(selector);
-        if (!elt) {
-            return [["WACL", "DOM", "NOMATCH"],
-                    "no element matches " + selector];
+        var elt;
+        try {
+            elt = D.resolveSel(selector);
+        } catch (e) {
+            if (e.__waclCode) return [e.__waclCode, e.message];
+            throw e;
         }
         var handle = "wd" + (++D.counter);
         var listener = function (e) {
-            var prev = D.currentEvent;
+            var prevEvent = D.currentEvent;
+            var prevElement = D.currentElement;
             D.currentEvent = e;
+            // The bound element becomes `:this` for the handler's body.
+            // Same unification as `each` — current element is whatever the
+            // current operation says it is; outside both it's null and
+            // `:this` errors. Nested binds and each stack cleanly via the
+            // save/restore here.
+            D.currentElement = elt;
             try {
                 wacl.Eval(script);
             } catch (err) {
                 wacl.onError(
                     "dom handler (" + evType + " on " + selector + ")", err);
             } finally {
-                D.currentEvent = prev;
+                D.currentEvent = prevEvent;
+                D.currentElement = prevElement;
             }
         };
         elt.addEventListener(evType, listener);
