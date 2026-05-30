@@ -48,12 +48,26 @@ namespace eval ::wacl::json {
         try { cur = JSON.parse(blob); }
         catch (e) { return [["JSON", "PARSE"], "json::get: " + e.message]; }
         for (var i = 0; i < path.length; i++) {
-            if (cur === null || cur === undefined) return "";
+            if (cur === undefined || !(path[i] in cur))
+                    return [["JSON", "BAD_PATH"], "json::get: " + e.message];
             cur = cur[path[i]];
         }
-        if (cur === undefined || cur === null) return "";
+        if (cur === null) return "";
         if (typeof cur === "object") return JSON.stringify(cur);
         return String(cur);
+    });
+    wacl.js.register("__wacl_json_extract", function (args) {
+        var blob = args[0];
+        var path = args.slice(1);
+        var cur;
+        try { cur = JSON.parse(blob); }
+        catch (e) { return [["JSON", "PARSE"], "json::extract: " + e.message]; }
+        for (var i = 0; i < path.length; i++) {
+            if (cur === undefined || !(path[i] in cur))
+                    return [["JSON", "BAD_PATH"], "json::extract: " + e.message];
+            cur = cur[path[i]];
+        }
+        return JSON.stringify(cur);
     });
     wacl.js.register("__wacl_json_exists", function (args) {
         var blob = args[0];
@@ -72,6 +86,10 @@ namespace eval ::wacl::json {
 
 proc ::wacl::json::get {blob args} {
     ::wacl::js::call __wacl_json_get $blob {*}$args
+}
+
+proc ::wacl::json::extract {blob args} {
+    ::wacl::js::call __wacl_json_extract $blob {*}$args
 }
 
 proc ::wacl::json::exists {blob args} {
