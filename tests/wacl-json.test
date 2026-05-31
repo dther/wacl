@@ -1,0 +1,141 @@
+# wacl::json — tcltest suite.
+#
+# Covers the read-side surface: get, extract, exists, the error codes
+# they raise, and the disambiguation that motivates extract's
+# existence. The package is fetched into the in-wasm FS by the runner
+# page; here we just `package require` it.
+
+package require tcltest
+package require wacl::json
+namespace import ::tcltest::*
+
+# ----- get: basic primitive types -----
+test json-get-1.1 {get string value} -body {
+    wacl::json get {{"a":"hello"}} a
+} -result hello
+
+test json-get-1.2 {get integer value} -body {
+    wacl::json get {{"n":42}} n
+} -result 42
+
+test json-get-1.3 {get float value} -body {
+    wacl::json get {{"x":3.14}} x
+} -result 3.14
+
+test json-get-1.4 {get boolean true collapses to "true"} -body {
+    wacl::json get {{"b":true}} b
+} -result true
+
+test json-get-1.5 {get boolean false} -body {
+    wacl::json get {{"b":false}} b
+} -result false
+
+test json-get-1.6 {get null returns empty string} -body {
+    wacl::json get {{"n":null}} n
+} -result {}
+
+# ----- get: traversal -----
+test json-get-2.1 {nested object path} -body {
+    wacl::json get {{"a":{"b":{"c":7}}}} a b c
+} -result 7
+
+test json-get-2.2 {array index} -body {
+    wacl::json get {{"xs":[10,20,30]}} xs 1
+} -result 20
+
+test json-get-2.3 {object endpoint comes back as JSON string} -body {
+    wacl::json get {{"o":{"x":1,"y":2}}} o
+} -result {{"x":1,"y":2}}
+
+test json-get-2.4 {array endpoint comes back as JSON string} -body {
+    wacl::json get {{"xs":[1,2,3]}} xs
+} -result {[1,2,3]}
+
+# ----- extract: preserves JSON type -----
+test json-extract-1.1 {extract string keeps the surrounding quotes} -body {
+    wacl::json extract {{"a":"true"}} a
+} -result {"true"}
+
+test json-extract-1.2 {extract boolean stays bare} -body {
+    wacl::json extract {{"b":true}} b
+} -result true
+
+test json-extract-1.3 {extract null stays bare} -body {
+    wacl::json extract {{"n":null}} n
+} -result null
+
+test json-extract-1.4 {extract number stays bare} -body {
+    wacl::json extract {{"n":42}} n
+} -result 42
+
+test json-extract-1.5 {extract array} -body {
+    wacl::json extract {{"a":[1,2,3]}} a
+} -result {[1,2,3]}
+
+test json-extract-1.6 {extract nested object} -body {
+    wacl::json extract {{"o":{"x":1}}} o
+} -result {{"x":1}}
+
+# ----- extract: the disambiguation that motivates it -----
+test json-extract-2.1 {get collapses string "true" and bool true} -body {
+    set s [wacl::json get {{"a":"true"}} a]
+    set b [wacl::json get {{"a":true}}  a]
+    string equal $s $b
+} -result 1
+
+test json-extract-2.2 {extract distinguishes them} -body {
+    set s [wacl::json extract {{"a":"true"}} a]
+    set b [wacl::json extract {{"a":true}}  a]
+    string equal $s $b
+} -result 0
+
+# ----- exists -----
+test json-exists-1.1 {present key} -body {
+    wacl::json exists {{"a":1}} a
+} -result 1
+
+test json-exists-1.2 {missing key} -body {
+    wacl::json exists {{"a":1}} b
+} -result 0
+
+test json-exists-1.3 {null value is still present} -body {
+    wacl::json exists {{"n":null}} n
+} -result 1
+
+test json-exists-1.4 {deep missing path is just missing} -body {
+    wacl::json exists {{"a":1}} b c d
+} -result 0
+
+test json-exists-1.5 {walking past a primitive reports missing, not error} -body {
+    wacl::json exists {{"a":"hello"}} a length
+} -result 0
+
+# ----- errors: errorCode is the contract -----
+test json-error-1.1 {malformed JSON throws JSON PARSE} -body {
+    wacl::json get not-json a
+} -returnCodes error -match glob -result {json::get:*} -errorCode {JSON PARSE}
+
+test json-error-2.1 {missing path throws JSON BAD_PATH} -body {
+    wacl::json get {{"a":1}} x
+} -returnCodes error -match glob -result {json::get:*} -errorCode {JSON BAD_PATH}
+
+test json-error-2.2 {BAD_PATH message names the traversed slice} -body {
+    catch {wacl::json get {{"a":{"b":1}}} a c} msg
+    set msg
+} -result {json::get: no such path: ["a","c"]}
+
+test json-error-2.3 {walk past primitive also gets BAD_PATH} -body {
+    wacl::json get {{"a":"hello"}} a length
+} -returnCodes error -match glob -result {json::get:*} -errorCode {JSON BAD_PATH}
+
+test json-error-3.1 {extract bad path throws BAD_PATH} -body {
+    wacl::json extract {{"a":1}} x
+} -returnCodes error -match glob -result {json::extract:*} -errorCode {JSON BAD_PATH}
+
+test json-error-4.1 {try/trap idiom works against the structured error} -body {
+    try {
+        wacl::json get {{"a":1}} x
+    } trap {JSON BAD_PATH} {msg} {
+        return "caught: $msg"
+    }
+} -match glob -result {caught: json::get: no such path:*}
