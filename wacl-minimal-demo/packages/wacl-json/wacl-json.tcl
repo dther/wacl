@@ -41,12 +41,12 @@
 if {[info commands ::wacl::js::names] eq ""} {
     error "wacl::json requires the wacl JS bridge"
 }
-if {[lsearch -exact [::wacl::js::names] eval] < 0} {
+if {"eval" ni [::wacl::js::names]} {
     error "wacl::json install requires the host to have granted `eval`"
 }
 
 namespace eval ::wacl::json {
-    namespace export get extract exists
+    namespace export *
     namespace ensemble create
 }
 
@@ -108,6 +108,14 @@ proc ::wacl::json::extract {blob args} {
 
 proc ::wacl::json::exists {blob args} {
     ::wacl::js::call __wacl_json_exists $blob {*}$args
+}
+
+proc ::wacl::json::string {str} {
+    return "\"$str\""
+}
+
+proc ::wacl::json::boolean {bool} {
+    return expr {$bool ? true : false}
 }
 
 package provide wacl::json 1.0
