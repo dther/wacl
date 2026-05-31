@@ -40,13 +40,19 @@ The user has a specific position on what this project should look like:
 
 ## Build map
 
-The build has (theoretically) been simplified since your last instantiation.
-Please do `make fullclean && make` to test if it was successful.
-Details on recipes are below.
+The Makefile uses real file-target dependencies (`tcl`, `tcl/unix/Makefile`,
+`tcl/unix/libtcl9.0.a` as targets, not phony names) so `make` does the
+right thing for incremental rebuilds — touching only `opt/wacl.c` and
+running `make` skips the libtcl build entirely. A cold `make fullclean
+&& make` takes about two minutes end-to-end (includes the Tcl tarball
+download); subsequent edits to wacl source are about ten seconds.
+`distclean` deliberately preserves the tarball so iteration on the
+Tcl-source-tree level doesn't keep re-downloading; `fullclean` removes
+the tarball too if you want a genuinely cold cache.
 
-- `make minimal`: build `wacl-minimal.{js,wasm}` and copy into `wacl-minimal-demo/`.
-  This is the default.
-- `make tcl`: download Tcl 9.0.3 source and unpack to `tcl/`
+- `make` (default) = `make minimal`: build `wacl-minimal.{js,wasm}` and
+  copy into `wacl-minimal-demo/`.
+- `make tcl`: download Tcl 9.0.3 source tarball and unpack to `tcl/`.
 - Build requires Emscripten 5.0.2 specifically — newer versions break
   this build chain. emsdk lives at `/opt/emsdk`; source
   `/opt/emsdk/emsdk_env.sh` before each session's first build.
