@@ -229,8 +229,8 @@ define('tcl/wacl', function () {
 
   Module['postRun'] = function () {
     _getInterp         = Module.cwrap('Wacl_GetInterp',                'number', []);
-    _eval              = Module.cwrap('Tcl_Eval',                      'number', ['number', 'string']);
-    _getStringResult   = Module.cwrap('Tcl_GetStringResult',           'string', ['number']);
+    _eval              = Module.cwrap('Wacl_Eval',                     'number', ['number', 'string']);
+    _getStringResult   = Module.cwrap('Wacl_GetStringResult',          'string', ['number']);
     _setJsResult       = Module.cwrap('Wacl_SetJsResultString',          null,   ['string']);
     _appendErrorCodeEl = Module.cwrap('Wacl_AppendJsErrorCodeElement',   null,   ['string']);
     _registerJsFn      = Module.cwrap('Wacl_RegisterJsFn',             'number', ['string', 'number']);

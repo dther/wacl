@@ -30,8 +30,8 @@ WACLEXPORTS = \
     -s EXPORTED_FUNCTIONS="[\
         '_main',\
         '_Wacl_GetInterp',\
-        '_Tcl_Eval',\
-        '_Tcl_GetStringResult',\
+        '_Wacl_Eval',\
+        '_Wacl_GetStringResult',\
         '_Wacl_RegisterJsFn',\
         '_Wacl_RevokeJsFn',\
         '_Wacl_SetJsResultString',\
