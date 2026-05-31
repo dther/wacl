@@ -42,9 +42,11 @@ WACLCC = \
     -I tcl/unix -I tcl/generic -I tcl/libtommath -I opt $(BCFLAGS) \
     -DSTATIC_BUILD=1 -DBUILD_tcl -DTCL_THREADS=0
 
-.PHONY: minimal waclprep waclconfig wacl.bc clean distclean
+.PHONY: minimal clean distclean fullclean
 
-waclprep:
+default: minimal
+
+tcl:
 	wget -nc $(TCLURL)
 	mkdir -p tcl
 	tar -C tcl --strip-components=1 -xf $(TCLSRC)
@@ -60,15 +62,15 @@ waclprep:
 #     removed --disable-threads, and TCL_THREADS defaults to 1 in tclInt.h.
 #     Threads pull in pthread_kill, which Emscripten doesn't provide because
 #     wasm/WebWorkers don't have POSIX signals. We force-disable here.
-waclconfig:
+tcl/unix/Makefile: tcl
 	cd tcl/unix && emconfigure ./configure --disable-load --disable-shared
 	cd tcl/unix && sed -i \
 	    's|^CC_SWITCHES = $$(STUB_CC_SWITCHES) -DBUILD_tcl|CC_SWITCHES = $$(STUB_CC_SWITCHES) $${ZLIB_INCLUDE} -DTCL_THREADS=0 -DBUILD_tcl|' Makefile
 
-wacl.bc: waclconfig
+tcl/unix/libtcl9.0.a: tcl/unix/Makefile
 	cd tcl/unix && emmake make libtcl9.0.a
 
-minimal: wacl.bc
+minimal: tcl/unix/libtcl9.0.a
 	emcc -c $(WACLCC) opt/wacl.c -o wacl.o
 	emcc -c $(WACLCC) opt/waclAppInit.c -o waclAppInit.o
 	cp js/preJsRequire.js preGeneratedJs.js
@@ -81,5 +83,10 @@ clean:
 	rm -f *.o wacl-minimal.js wacl-minimal.wasm preGeneratedJs.js
 	if [ -e tcl/unix/Makefile ] ; then cd tcl/unix && make clean ; fi
 
+# We don't ever change the Tcl source tarball directly,
+# so preserve it by default to save bandwidth.
 distclean: clean
-	rm -rf tcl $(TCLSRC)
+	rm -rf tcl
+
+fullclean: distclean
+	rm -f $(TCLSRC)
