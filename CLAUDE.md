@@ -40,13 +40,17 @@ The user has a specific position on what this project should look like:
 
 ## Build map
 
-- `Makefile`: `make waclprep` (one-off: download Tcl 9.0.3 source,
-  unpack to `tcl/`), `make minimal` (build `wacl-minimal.{js,wasm}`
-  and copy into `wacl-minimal-demo/`).
+The build has (theoretically) been simplified since your last instantiation.
+Please do `make fullclean && make` to test if it was successful.
+Details on recipes are below.
+
+- `make minimal`: build `wacl-minimal.{js,wasm}` and copy into `wacl-minimal-demo/`.
+  This is the default.
+- `make tcl`: download Tcl 9.0.3 source and unpack to `tcl/`
 - Build requires Emscripten 5.0.2 specifically — newer versions break
   this build chain. emsdk lives at `/opt/emsdk`; source
   `/opt/emsdk/emsdk_env.sh` before each session's first build.
-- `make waclconfig` runs `emconfigure` then sed-patches Tcl's generated
+- `make tcl/unix/Makefile` runs `emconfigure` then sed-patches Tcl's generated
   `Makefile` to:
     1. Add `${ZLIB_INCLUDE}` to `CC_SWITCHES`. Tcl 9 upstream bug — when
        configure falls back to internal `compat/zlib/`, generic .c files
