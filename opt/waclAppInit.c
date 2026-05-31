@@ -2,12 +2,6 @@
 #include <emscripten.h>
 #include "wacl.h"
 
-/* commentin' these out, we're just testing things.
-EXTERN int Tdom_Init     _ANSI_ARGS_((Tcl_Interp *interp));
-EXTERN int Tdom_SafeInit _ANSI_ARGS_((Tcl_Interp *interp));
-EXTERN int Rl_json_Init             (Tcl_Interp *interp);
-*/
-
 /*
  * The main interpreter, 
  * initialized at startup and returned by Wacl_GetMainInterp
@@ -18,13 +12,7 @@ static int
 Wacl_AppInit(Tcl_Interp* interp)
 {
     if (Wacl_Init(interp) != TCL_OK)
-        printf("Error while initialize Wacl! Package will not be present");
-/*
-    if (Tdom_Init(interp) != TCL_OK)
-        printf("Error while initialize tDOM! Package will not be present");
-    if (Rl_json_Init(interp) != TCL_OK)
-        printf("Error while initialize rl_json! Package will not be present");
-*/
+        printf("Error while initializing Wacl! Package will not be present");
     return 0;
 }
 
@@ -37,7 +25,6 @@ EmscriptenMainLoop()
 Tcl_Interp*
 Wacl_GetInterp()
 {
-
     return mainInterp;
 }
 
