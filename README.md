@@ -49,16 +49,16 @@ This builds Wacl without pulling in external dependencies.
 
 ## How do I build?
 
-- use Emscripten 5.0.2
-- `make waclprep`, if it errors don't worry about it, we just need the Tcl source
-- `make minimal`
+- Install Emscripten 5.0.2 and activate it with `source $EMSDK/emsdk_env.sh`.
+  - Use a well-known shell like Bash for this. I used `yash` and it doesn't work.
+- `make`
 - `wacl-minimal.js` and `wacl-minimal.wasm` are your artefacts
 
 The Makefile edits are quick and dirty and NOT heavily tested,
 so best of luck. A future rewrite is highly likely.
 
 ## What's next?
-A terminal.
+An *embeddable* terminal.
 
 Old README below.
 
