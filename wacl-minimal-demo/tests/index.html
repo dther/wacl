@@ -167,14 +167,16 @@ function appendLog(text, isStderr) {
   wrapEl.scrollTop = wrapEl.scrollHeight;
 }
 
-const packageFiles = [
-  "packages/wacl-json/pkgIndex.tcl",
-  "packages/wacl-json/wacl-json.tcl",
-];
-
-const testFiles = [
-  "tests/all.tcl",
-  "tests/wacl-json.test",
+// Each entry: [URL relative to this page, destination in the in-wasm FS].
+// Packages live under wacl-minimal-demo/, one level up — ../packages/...
+// Tests live at the repo root, two levels up — ../../tests/...
+// Decoupling source URL from destination path keeps the relative-URL
+// awkwardness from leaking into the source-on-Tcl-side paths.
+const filesToInject = [
+  ["../packages/wacl-json/pkgIndex.tcl",   "/packages/wacl-json/pkgIndex.tcl"],
+  ["../packages/wacl-json/wacl-json.tcl",  "/packages/wacl-json/wacl-json.tcl"],
+  ["../../tests/all.tcl",                  "/tests/all.tcl"],
+  ["../../tests/wacl-json.test",           "/tests/wacl-json.test"],
 ];
 
 require(["tcl/wacl"], function (m) {
@@ -190,21 +192,19 @@ require(["tcl/wacl"], function (m) {
       return String(r);
     });
 
-    function fetchTo(path) {
-      return fetch("../" + path).then((r) => {
-        if (!r.ok) throw new Error(path + ": HTTP " + r.status);
+    function fetchTo([url, dest]) {
+      return fetch(url).then((r) => {
+        if (!r.ok) throw new Error(url + ": HTTP " + r.status);
         return r.text();
       }).then((body) => {
-        const full = "/" + path;
-        const dir = full.substring(0, full.lastIndexOf("/"));
+        const dir = dest.substring(0, dest.lastIndexOf("/"));
         try { interp.Module.FS.mkdirTree(dir); } catch (e) {}
-        interp.Module.FS.writeFile(full, body);
+        interp.Module.FS.writeFile(dest, body);
       });
     }
 
-    Promise.all([...packageFiles, ...testFiles].map(fetchTo)).then(() => {
+    Promise.all(filesToInject.map(fetchTo)).then(() => {
       interp.Eval("lappend auto_path /packages");
-      loadingEl.classList.add("gone");
       statusEl.textContent = "running…";
       statusEl.className = "running";
 
@@ -229,6 +229,12 @@ require(["tcl/wacl"], function (m) {
       appendLog("fetch failed: " + e + "\n", true);
       statusEl.textContent = "fetch failed";
       statusEl.className = "failed";
+    }).finally(() => {
+      // Dismiss the loading overlay regardless of outcome. If it
+      // stayed up on failure, the status pill would update with an
+      // error message *behind* the overlay and the page would look
+      // stuck on "loading…" with no visible reason.
+      loadingEl.classList.add("gone");
     });
 
     window.__interp = interp;
