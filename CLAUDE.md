@@ -313,14 +313,21 @@ intended flow is `require X; require Y; …; ::wacl::js::revoke eval` —
 after the revoke, no more bridged packages can be added, but the ones
 already loaded keep working.
 
-  - **wacl::json** — `wacl::json get $blob ?key…?` and
+  - **wacl::json** — `wacl::json get $blob ?key…?`,
+    `wacl::json extract $blob ?key…?`, and
     `wacl::json exists $blob ?key…?`. Path traversal in JS via
-    `JSON.parse`; values come back as strings (objects/arrays as
-    re-stringified JSON so you can recurse). Deliberately no
+    `JSON.parse`. `get` returns coerced Tcl values (objects and arrays
+    re-stringified as JSON so you can recurse); `extract` returns the
+    raw JSON fragment (strings stay quoted, `true` stays a bare
+    boolean, `null` stays bare), mirroring rl_json's read-side
+    disambiguator. Use `extract` when you need to distinguish the
+    JSON string `"true"` from the boolean `true` — they collapse to
+    the same Tcl representation via `get`. Errors are catchable via
+    `try ... trap {JSON PARSE}` or `{JSON BAD_PATH}`. Deliberately no
     `stringify`: Tcl can't discriminate the string `"true"` from
     boolean `true`, so Tcl→JSON is ambiguous in a way JSON→Tcl
-    isn't. Escape via `::wacl::js::call eval {JSON.stringify(…)}`
-    until a proper Tcl-side builder exists.
+    isn't. Same precedent will apply when typed-write commands
+    (`json string`, `json bool`, …) get added.
 
   - **wacl::dom** — events plus DOM manipulation, consistently "trust
     JS to be JS." Selectors are standard CSS resolved through
@@ -387,6 +394,64 @@ Once the JS-side `TclZipfs_Mount` cwrap lands (see punted), pages will
 ship packages as a zip and mount, but this fetch-then-write path stays
 viable for development.
 
+## Test harness (`tests/` + `wacl-minimal-demo/tests/` + CI)
+
+`tcltest`, the test framework that ships in Tcl core, drives every
+suite. No new payload — it's already in `/lib/tcl.zip` and
+`package require tcltest` finds it through `auto_path`. Files at
+`tests/*.test` use the standard `-body / -result / -returnCodes /
+-errorCode / -match` machinery, which is exactly the shape we need
+for asserting the structured error codes the packages raise.
+
+Three runners, all sourcing the same test files against the same
+runtime:
+
+  - **`tests/all.tcl`** — driver. Sources every `*.test` in lexical
+    order in *one* interpreter (NOT `tcltest::runAllTests`, which
+    spawns a child interp per test file and loses the JS-side `eval`
+    grant we just bootstrapped). Prints a manual summary at the end.
+
+  - **`tests/run-headless.mjs`** — CLI runner. Loads the wasm in a
+    node `vm` context, injects packages + tests into the in-wasm FS,
+    sources `all.tcl`, exits non-zero on any failure. Used by CI;
+    locally it's faster than reloading the browser page.
+
+  - **`wacl-minimal-demo/tests/index.html`** — browser runner. Live
+    log streams tcltest's output as it executes, classified into
+    pass / fail / skip / header by line prefix and coloured. Status
+    pill in the header reports counts and overall outcome. Same
+    page-relative fetch pattern as the playground but reaching one
+    level higher for `tests/` since they're at repo root rather than
+    under `wacl-minimal-demo/`.
+
+Two implementation choices worth knowing before extending the suite:
+
+  - Individual `.test` files deliberately don't call `cleanupTests`.
+    The default behaviour prints a per-file summary *and resets*
+    `::tcltest::numTests`, which would zero out the totals before the
+    runner reads them. `all.tcl` prints the unified summary at the
+    end and leaves the counts intact.
+  - Tests that assert `-returnCodes error` also need a result spec
+    (either exact, `-match glob -result {prefix:*}`, or
+    `-match glob -result *`). tcltest's default `-result` is `""` and
+    it compares against the actual error message, so without an
+    explicit result spec every error-throwing test fails with a
+    confusing "Result was: ..., should have been (exact matching): "
+    mismatch. The `-match glob -result {json::get:*}` style adds an
+    honest assertion that the message points at the right command.
+
+**CI.** `.github/workflows/tests.yml` runs `node tests/run-headless.mjs`
+on every push, every pull request, and on `workflow_dispatch` from the
+Actions tab. No wasm rebuild — uses the committed artifacts in
+`wacl-minimal-demo/`. Workflows under `.github/workflows/` require the
+GitHub `workflow` scope on the pushing token, which the in-session
+automation tokens don't carry; landing the file requires `git push`
+from a developer credential or a paste through the GH web UI.
+End-to-end runtime ~7 seconds.
+
+Currently only `wacl-json.test` exists. `wacl-dom.test`, `wacl-chan.test`,
+and a bridge test are the obvious follow-ups, each at the same rhythm.
+
 ## Packaging philosophy: zipfs as the lever, no package manager
 
 Tcl 9's zipfs gives us first-class app packaging for free: a single
@@ -425,7 +490,23 @@ the LOVE-clone-style "one bundle, runs everywhere" model.
 The `TclZipfs_Mount` wrapper that exposes this from JS still needs
 writing — see the punted list.
 
-## The current demo (`wacl-minimal-demo/index.html`)
+## Demo pages (`wacl-minimal-demo/`)
+
+Three pages, each self-contained, no framework, AMD shim only.
+
+- **`/`** (the REPL) — the original Tcl terminal in the browser.
+- **`/playground/`** — DOM-from-Tcl playground. A 4×4 grid of cards
+  + a task list as the sandbox, side-by-side with a Tcl editor and
+  output panel, plus an examples ribbon along the bottom that loads
+  and runs pre-written scripts (light odds, rainbow hues, spin all,
+  dim non-primes, click-to-toggle, insert-all-four, etc.). Styling
+  leans on modern CSS — Grid for layout, oklch for perceptually
+  uniform colour cycling per-card via `--hue` custom properties,
+  cubic-bezier transitions, keyframe animations.
+- **`/tests/`** — browser test runner. Live-log output coloured by
+  outcome, status pill that reports counts at the end.
+
+### Detail: the REPL (`index.html`)
 
 - One file, inline CSS + JS, no framework.
 - 5-line AMD shim (`define`, `require`, `require.toUrl`) avoids pulling
@@ -498,6 +579,12 @@ writing — see the punted list.
   zip and go." Note for the LOVE-clone packaging story: "C extensions
   need to be compiled for wacl specifically, same way desktop
   extensions are compiled against a specific Tcl version."
+  Inter-extension ABI: use `Tcl_PkgProvideEx` / `Tcl_PkgRequireEx`
+  with a version word at offset 0 of a vtable struct — this is the
+  Tcl-orthodox version of the "extensions expose a C ABI to each
+  other through a stubs-table" pattern, mature, per-interp, cleaned
+  up at interp teardown. `Tcl_GetAssocData` is the side door for
+  more dynamic patterns.
 - **Self-pipe wakeup for `tclSelectNotfy.c` + TIP submission.** Tcl 9's
   notifier uses `pthread_kill` to wake the notifier thread; we work
   around with `TCL_THREADS=0`. The right upstream fix is a configure
