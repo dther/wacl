@@ -1,11 +1,12 @@
 # Wacl build — Tcl 9 in the browser.
 #
 # Targets that matter:
-#   make waclprep     download and unpack Tcl 9 source under ./tcl/
+#   make tcl          download and unpack Tcl 9 source under ./tcl/
 #   make minimal      build wacl-minimal.{js,wasm} and copy them into
 #                     wacl-minimal-demo/
 #   make clean        remove build artefacts but keep ./tcl/
 #   make distclean    also remove ./tcl/
+#   make fullclean    remove the Tcl source tar, too
 #
 # The extensions/all/install/package targets that were here for the
 # 8.6 era (with tdom + rl_json + tcllib) are gone for now; they'll
