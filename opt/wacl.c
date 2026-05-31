@@ -38,12 +38,12 @@ typedef int (*WaclJsFn)(int argc, const char **argv);
 static Tcl_HashTable waclJsRegistry;
 static int           waclJsRegistryInited = 0;
 
-/* Result side channel — written by the JS shim, read by JsCallCmd. */
+/* Result side channel — written by the JS shim, read by wacl_JsCallCmd. */
 static Tcl_Obj *waclJsResultValue     = NULL;  /* owned ref, or NULL */
 static Tcl_Obj *waclJsResultErrorCode = NULL;  /* owned ref, or NULL */
 
 static void
-waclJsResetResult(void)
+wacl_JsResetResult(void)
 {
     if (waclJsResultValue != NULL) {
         Tcl_DecrRefCount(waclJsResultValue);
@@ -94,7 +94,7 @@ Wacl_RevokeJsFn(const char *name)
 
 
 static int
-JsCallCmd(ClientData clientData, Tcl_Interp *interp,
+wacl_JsCallCmd(ClientData clientData, Tcl_Interp *interp,
           int objc, Tcl_Obj *const objv[])
 {
     if (objc < 2) {
@@ -120,7 +120,7 @@ JsCallCmd(ClientData clientData, Tcl_Interp *interp,
         }
     }
 
-    waclJsResetResult();
+    wacl_JsResetResult();
     WaclJsFn fn = (WaclJsFn)(intptr_t) Tcl_GetHashValue(e);
     int rc = fn(argc, argv);
 
@@ -138,7 +138,7 @@ JsCallCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 static int
-JsNamesCmd(ClientData clientData, Tcl_Interp *interp,
+wacl_JsNamesCmd(ClientData clientData, Tcl_Interp *interp,
            int objc, Tcl_Obj *const objv[])
 {
     if (objc != 1) {
@@ -173,7 +173,7 @@ JsNamesCmd(ClientData clientData, Tcl_Interp *interp,
  * a real leak.
  */
 static int
-JsRevokeCmd(ClientData clientData, Tcl_Interp *interp,
+wacl_JsRevokeCmd(ClientData clientData, Tcl_Interp *interp,
             int objc, Tcl_Obj *const objv[])
 {
     if (objc != 2) {
@@ -195,7 +195,7 @@ JsRevokeCmd(ClientData clientData, Tcl_Interp *interp,
  * scoped to a chosen root node.
  */
 static int
-DomCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
+wacl_DomCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 {
     if (objc != 5) {
         Tcl_WrongNumArgs(interp, 1, objv, "attr|css selector key val");
@@ -244,10 +244,10 @@ Wacl_Init(Tcl_Interp *interp)
     Tcl_CreateNamespace(interp, "::wacl",     NULL, NULL);
     Tcl_CreateNamespace(interp, "::wacl::js", NULL, NULL);
 
-    Tcl_CreateObjCommand(interp, "::wacl::dom",        DomCmd,      NULL, NULL);
-    Tcl_CreateObjCommand(interp, "::wacl::js::call",   JsCallCmd,   NULL, NULL);
-    Tcl_CreateObjCommand(interp, "::wacl::js::names",  JsNamesCmd,  NULL, NULL);
-    Tcl_CreateObjCommand(interp, "::wacl::js::revoke", JsRevokeCmd, NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::wacl::dom",        wacl_DomCmd,      NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::wacl::js::call",   wacl_JsCallCmd,   NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::wacl::js::names",  wacl_JsNamesCmd,  NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::wacl::js::revoke", wacl_JsRevokeCmd, NULL, NULL);
 
     Tcl_PkgProvide(interp, "wacl", "1.0.0");
     return TCL_OK;
