@@ -119,16 +119,14 @@ only for waits a single pump can satisfy from Tcl's own queue. The honest
 framing: on the main thread, Tcl adopts JS's "register interest, return"
 discipline; blocking `vwait` is a worker-mode privilege.
 
-### Eval-fence implication
+### Eval-fence: removed
 
-JS-driven pumping is **not** re-entrant `Wacl_Eval` — the pump calls
-`Tcl_ServiceAll`/`Tcl_DoOneEvent`, which dispatch callbacks via Tcl's own
-`Tcl_EvalObjEx`, not through our `Wacl_Eval` entry. So the fence won't
-trip on pumps. It should be narrowed to refuse only genuinely *nested
-synchronous* `Wacl_Eval` (JS Eval → puts → output sink → JS Eval), while
-letting loop-driven pumping and the fileevent callbacks it dispatches
-run freely. Once pumping exists, the fence's own `after 0` / `after idle`
-advice becomes actually true instead of a dead end.
+The re-entrancy fence is **gone** (see Progress). It was solving the wrong
+problem: re-entrant evaluation is normal and safe in Tcl, and the genuine
+risk — corrupting a *suspended* evaluation's state — only arises at a
+*yield* (see the yield design conclusion), not at a nested call that runs
+to completion. JS-driven pumping never tripped it anyway (the pump
+dispatches via Tcl's own `Tcl_EvalObjEx`, not `Wacl_Eval`).
 
 ## Deferred (worker mode + shared state)
 
@@ -163,29 +161,82 @@ notifier's "can't wait, would deadlock" signal (the stock select notifier
 returns it for the no-fds/no-timeout case); it's what makes `vwait` fail
 fast. For a finite timeout (a poll), 0 is correct.
 
-**Test acceptance, partly in.** `chan-fileevent-1.1` is rewritten to the
-real model — JS feeds bytes, `chan postevent` signals readable, `update`
-(the Tcl-side sibling of `Wacl_ServiceEvents`) pumps, the `fileevent`
-fires and drains the bytes — and now **passes** in both runners, no
-`vwait`. Headless CI is green (46 pass / 0 fail / 26 skip). The lone
-remaining `eventLoop` marker is `dom-bind-3.1`: a DOM event has no
-Tcl-side `postevent` to pump, and triggering it with `wacl::dom call …
-click` fires the listener synchronously inside the current `Wacl_Eval`,
-whose re-entrant `wacl.Eval` the fence refuses. It's now blocked
-specifically on step 2 (the eval-fence), not the notifier — skips
-headless, red in the browser.
+**Test acceptance, in.** `chan-fileevent-1.1` is rewritten to the real
+model — JS feeds bytes, `chan postevent` signals readable, `update` (the
+Tcl-side sibling of `Wacl_ServiceEvents`) pumps, the `fileevent` fires
+and drains — and passes in both runners, no `vwait`.
+
+**Eval-fence removed** (commit "Remove requirement for re-entrant
+execution") and locked in by `tests/wacl-bridge.test`: a JS callback may
+re-enter `Wacl_Eval` synchronously, a thrown JS exception is a catchable
+Tcl error, and a nested-`Eval` failure propagates with its `errorInfo`
+trace intact (no save/restore — silent isolation is the thing we reject).
+With the fence gone, `dom-bind-3.1` now passes for **synchronous**
+dispatch: `wacl::dom call … click` fires the listener inline and the
+bound script's re-entrant `wacl.Eval` runs. The `eventLoop` constraint is
+retired (nothing uses it). What a test still can't reach is a *real*
+event-loop-deferred click — that waits on the yield construct below.
+Headless green (52 pass / 0 fail / 26 skip — dom skips, no DOM); jsdom
+green across the board (78/78).
+
+## Yield to the event loop — design conclusion
+
+`vwait`/`update` assume Tcl owns the loop; we share it, so the missing
+primitive is "yield to the substrate and resume in place" — Tcl's own
+idiom for that is `update idletasks` ("let deferred display work happen"),
+which on the web *is* "let the JS loop catch up." The transparent,
+resume-in-place version requires stack switching — **Asyncify** (or the
+lighter, standards-track **JSPI**); `setjmp`/`longjmp` can't do it
+(`longjmp` only unwinds up, never resumes back into the computation).
+
+The interp-safety worry turned out smaller than first feared, verified
+against `tclExecute.c`:
+
+  - **A single suspension with re-entrant evals that complete is safe.**
+    Tcl's execution stack is *segmented* (`GrowEvaluationStack` adds a new
+    `ExecStack` and retains the old; a nested allocation never moves or
+    frees the parked evaluation's operands), so a re-entrant `Eval` during
+    a yield is just a temporally-stretched nested command — `numLevels`,
+    the `CallFrame` chain, and the operand stack all balance and restore.
+    Asyncify saves/restores the C stack; the heap-resident interp
+    structures are built to nest.
+  - **The one real hazard is overlapping suspensions** — a re-entrant eval
+    that *itself* yields, so resume order can violate the stack's LIFO
+    discipline. `tclExecute.c:1034` panics ("Stack after current is in
+    use") on exactly that, and classic Asyncify keeps a single global
+    unwind state, so both layers assume one suspension in flight, LIFO.
+  - **So the guard is a single flag, not a wall:** refuse to yield while
+    another evaluation is already suspended ("defer with `after`"). Plus
+    two correctness touches: JS-entry `Wacl_Eval` should force
+    `TCL_EVAL_GLOBAL` (so a re-entrant eval during a yield doesn't inherit
+    the parked proc's locals), and the yield command must set its own
+    result on resume.
+
+Real remaining costs are the mundane ones: Asyncify's size/speed tax
+(prefer JSPI; scope with `ASYNCIFY_ONLY`), and — the big ripple —
+**`interp.Eval` becomes async** (Promise-returning), which is the same
+work as rewiring the Eval-driven demos. Going async is the through-line.
 
 ## Next concrete steps
 
-1. **Narrow the eval-fence** to genuinely nested-synchronous `Wacl_Eval`
-   only, so a DOM listener firing from the JS loop (and the `after 0`
-   advice the fence prints) actually works — which also flips
-   `dom-bind-3.1` green.
-2. **Real-time stdio as event-loop channels**, then runtime FIFOs. This
-   is not just a C/bridge change: **the demos are all `interp.Eval(line)`
-   -driven** (REPL, playground, tests page) and must be rewired to the
-   pump/channel model — stdin becomes a channel JS feeds and
-   `Wacl_ServiceEvents` drains, rather than a one-shot synchronous Eval
-   per line. Touches `js/preJsRequire.js` and all three demo pages.
+1. **Yield spike.** Re-provision emsdk, enable Asyncify (scoped) on a
+   scratch build, and prove the narrowed safety story: yield from deep in
+   a computation, re-enter Tcl from JS during the suspension, resume,
+   confirm the interp survives; then attempt a *nested* yield and confirm
+   the one-suspension guard catches it before the `tclExecute.c:1034`
+   panic. That experiment decides Asyncify-vs-JSPI and the whole async
+   boundary.
+2. **Real-time stdio as event-loop channels**, then runtime FIFOs —
+   coupled to making `interp.Eval` async and rewiring the
+   `interp.Eval(line)`-driven demos (REPL, playground, tests page) to the
+   pump/channel model. Touches `js/preJsRequire.js` and all three pages.
 3. **Re-home `wacl::chan`'s JS-side deferral** onto `Wacl_ServiceEvents`
    instead of bare `setTimeout`, once the pump is the canonical loop.
+
+## Punted wiring
+
+- **Unhandled-exception callback.** Unhandled Tcl errors currently go to
+  stderr — REPL-correct, app-wrong (the web's default is "log to console,"
+  not "bug report, please"). Add an explicit JS-side sink for unhandled
+  Tcl exceptions, alongside the existing `wacl.onError`/`supportURL`
+  surface. Wiring only; after the pipes work.

@@ -9,20 +9,16 @@
 # the package; skipping is the honest option until a real DOM-in-CI
 # (jsdom or similar) is wired deliberately.
 #
-# One thing lives behind the `eventLoop` constraint: a bound handler
-# actually *firing*. Unlike wacl::chan — whose readable event we can now
-# post (`chan postevent`) and pump (`update`) entirely Tcl-side, so its
-# fileevent test passes — a DOM event has no Tcl-side postevent to pump,
-# and the only way to trigger it from a test is `wacl::dom call … click`,
-# a native dispatch that fires the listener *synchronously inside* the
-# Tcl_Eval frame that triggered it. The listener then calls
-# `wacl.Eval(script)`, which the re-entrant eval-fence refuses by design.
-# A real user event fires between frames and wouldn't re-enter, but
-# reproducing that needs the eval-fence narrowed (see docs/event-loop.md
-# step 3) and/or a harness that yields between dispatch and assertion.
-# So handler registration (bind/unbind) is exercised; handler invocation
-# stays the lone red marker, now blocked specifically on the eval-fence,
-# not the notifier.
+# On handler *firing*: now that the re-entrant eval-fence is gone, a
+# native dispatch — `wacl::dom call … click`, which fires the listener
+# synchronously inside the current Tcl_Eval frame — runs the bound script
+# for real (the listener's re-entrant `wacl.Eval` used to be refused; it
+# isn't any more). So dom-bind-3.1 exercises bind → fire → handler, and
+# passes. What it does NOT cover is a *real* event-loop-deferred dispatch:
+# a genuine user click fires from the JS event loop between frames, and
+# observing that from a test needs the "yield to the event loop" construct
+# we haven't built yet (see docs/event-loop.md). Synchronous dispatch is
+# as far as a test can honestly reach today; the async case waits on yield.
 #
 # Fixtures: every test builds its sandbox under a single #wdt container
 # appended to <body>, with element ids/classes prefixed `wdt-` so a
@@ -36,7 +32,6 @@ namespace import ::tcltest::*
 
 testConstraint dom \
     [::wacl::js::call eval {typeof document !== "undefined" ? "1" : "0"}]
-testConstraint eventLoop 1
 
 # (Re)build the fixture container with the given inner HTML.
 proc fixture {html} {
@@ -273,18 +268,17 @@ test dom-event-1.1 {event field outside a handler is the empty string} -constrai
     wacl::dom event type
 } -result {}
 
-# ----- the firing path: the lone marker, blocked on the eval-fence -----
-# Skips headless (no DOM); in the browser it fails because `call click`
-# fires the listener synchronously inside this Tcl_Eval frame and the
-# listener's re-entrant wacl.Eval is refused by the fence. See the file
-# header and docs/event-loop.md step 3.
-test dom-bind-3.1 {a bound handler runs when its event fires} -constraints {eventLoop dom} -setup {
+# ----- the firing path: synchronous dispatch (async awaits `yield`) -----
+# `call click` fires the listener synchronously, so by the time it returns
+# the bound script has already run and ::fired is set — no `vwait` (which
+# can't work on the main thread anyway). This proves bind → fire → handler.
+# A real event-loop-deferred click is the yield construct's job; see header.
+test dom-bind-3.1 {a bound handler runs when its event fires} -constraints dom -setup {
     fixture {<button id="wdt-btn">go</button>}
     set ::fired 0
 } -body {
     wacl::dom bind #wdt-btn click { set ::fired 1 }
     wacl::dom call #wdt-btn click
-    vwait ::fired
     set ::fired
 } -cleanup {
     wacl::dom remove #wdt
