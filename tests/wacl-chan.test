@@ -1,0 +1,212 @@
+# wacl::chan — tcltest suite.
+#
+# Covers the synchronous surface of the reflected channel: open/names,
+# the EXISTS guard, close/finalize bookkeeping, and the byte round-trip
+# in both directions (JS->Tcl via `chan read`, Tcl->JS via `onData`).
+#
+# What's deliberately NOT here: the async fileevent path. A JS-side
+# write defers its `chan postevent` through setTimeout(0), which only
+# fires once control returns to the host event loop — but this harness
+# drives everything synchronously inside a single Tcl_Eval, so a
+# `vwait` waiting on that postevent would block the very call the timer
+# needs to fire. That integration belongs to a runner that pumps the
+# event loop; the `eventLoop` constraint below keeps the gap honest and
+# visible (SKIPPED, not silently absent).
+#
+# This suite runs identically headless and in the browser — the channel
+# needs no DOM, only the waclChan surface the package installs itself.
+
+package require tcltest
+package require wacl::chan
+namespace import ::tcltest::*
+
+testConstraint eventLoop 0
+
+# Thin helper: evaluate a JS snippet through the host-granted bridge.
+proc js {script} { ::wacl::js::call eval $script }
+
+# ----- open / names -----
+test chan-open-1.1 {open registers the name} -body {
+    set ch [wacl::chan open c1]
+    expr {"c1" in [wacl::chan names]}
+} -cleanup {
+    close $ch
+} -result 1
+
+test chan-open-1.2 {open returns a live Tcl channel} -body {
+    set ch [wacl::chan open c2]
+    expr {$ch in [chan names]}
+} -cleanup {
+    close $ch
+} -result 1
+
+test chan-open-1.3 {channel comes configured non-blocking, unbuffered} -body {
+    set ch [wacl::chan open c3]
+    list [fconfigure $ch -blocking] [fconfigure $ch -buffering]
+} -cleanup {
+    close $ch
+} -result {0 none}
+
+test chan-open-1.4 {the JS side sees the name too} -body {
+    set ch [wacl::chan open c4]
+    js {String(globalThis.waclChan.names().indexOf("c4") >= 0)}
+} -cleanup {
+    close $ch
+} -result true
+
+test chan-names-1.1 {names lists every open channel} -body {
+    set a [wacl::chan open n1]
+    set b [wacl::chan open n2]
+    lsort [wacl::chan names]
+} -cleanup {
+    close $a
+    close $b
+} -result {n1 n2}
+
+test chan-open-2.1 {double open throws WACL CHAN EXISTS} -setup {
+    set ch [wacl::chan open dup]
+} -body {
+    wacl::chan open dup
+} -cleanup {
+    close $ch
+} -returnCodes error -errorCode {WACL CHAN EXISTS} \
+  -match glob -result {channel already open:*}
+
+# ----- close / finalize bookkeeping -----
+test chan-close-1.1 {close drops the name from the Tcl registry} -body {
+    set ch [wacl::chan open x1]
+    close $ch
+    expr {"x1" in [wacl::chan names]}
+} -result 0
+
+test chan-close-1.2 {close drops the name from the JS registry} -body {
+    set ch [wacl::chan open x2]
+    close $ch
+    js {String(globalThis.waclChan.names().indexOf("x2") >= 0)}
+} -result false
+
+# ----- attach errors -----
+test chan-attach-1.1 {attach to an unknown name throws JS-side} -body {
+    js {
+        try { waclChan.attach("nope"); "no-throw" }
+        catch (e) { "threw: " + e.message }
+    }
+} -match glob -result {threw: *no such channel: nope}
+
+# ----- JS -> Tcl: js write, tcl read -----
+test chan-j2t-1.1 {a JS write is drained by a Tcl read} -setup {
+    set ch [wacl::chan open d1]
+    js {globalThis.__a = waclChan.attach("d1"); "ok"}
+} -body {
+    js {__a.write("hello"); "ok"}
+    chan read $ch 5
+} -cleanup {
+    close $ch
+    js {delete globalThis.__a; "ok"}
+} -result hello
+
+test chan-j2t-1.2 {an empty channel reads as the empty string} -setup {
+    set ch [wacl::chan open d2]
+} -body {
+    chan read $ch 16
+} -cleanup {
+    close $ch
+} -result {}
+
+test chan-j2t-1.3 {a partial read leaves the remainder buffered} -setup {
+    set ch [wacl::chan open d3]
+    js {globalThis.__a = waclChan.attach("d3"); "ok"}
+} -body {
+    js {__a.write("abcdef"); "ok"}
+    set first  [chan read $ch 2]
+    set second [chan read $ch 4]
+    list $first $second
+} -cleanup {
+    close $ch
+    js {delete globalThis.__a; "ok"}
+} -result {ab cdef}
+
+test chan-j2t-2.1 {bytes 1..255 round-trip with full fidelity} -setup {
+    set ch [wacl::chan open d4]
+    js {globalThis.__a = waclChan.attach("d4"); "ok"}
+} -body {
+    js {var arr = []; for (var i = 1; i < 256; i++) arr.push(i);
+        __a.write(new Uint8Array(arr)); "ok"}
+    set data [chan read $ch 255]
+    binary scan $data cu* got
+    set want {}
+    for {set i 1} {$i < 256} {incr i} { lappend want $i }
+    list [string length $data] [expr {$got eq $want}]
+} -cleanup {
+    close $ch
+    js {delete globalThis.__a; "ok"}
+} -result {255 1}
+
+test chan-j2t-2.2 {NUL truncates the payload at the bridge boundary} -setup {
+    set ch [wacl::chan open d5]
+    js {globalThis.__a = waclChan.attach("d5"); "ok"}
+} -body {
+    # The js::call return crosses the wasm boundary as a C string, so a
+    # NUL byte ends it early: [65,0,66] arrives as just "A". This is the
+    # one place the otherwise byte-clean channel is not. Asserted so the
+    # boundary is a known, tested fact rather than a latent surprise.
+    js {__a.write(new Uint8Array([65, 0, 66])); "ok"}
+    set data [chan read $ch 10]
+    string length $data
+} -cleanup {
+    close $ch
+    js {delete globalThis.__a; "ok"}
+} -result 1
+
+# ----- Tcl -> JS: tcl write, js onData -----
+test chan-t2j-1.1 {a Tcl write reaches the JS onData callback} -setup {
+    set ch [wacl::chan open w1]
+    js {globalThis.__a = waclChan.attach("w1");
+        globalThis.__got = null;
+        __a.onData = function (b) {
+            globalThis.__got = Array.prototype.join.call(b, ",");
+        };
+        "ok"}
+} -body {
+    puts -nonewline $ch AB
+    flush $ch
+    js {String(globalThis.__got)}
+} -cleanup {
+    close $ch
+    js {delete globalThis.__a; delete globalThis.__got; "ok"}
+} -result 65,66
+
+test chan-t2j-2.1 {high bytes survive the Tcl->JS direction too} -setup {
+    set ch [wacl::chan open w2]
+    js {globalThis.__a = waclChan.attach("w2");
+        globalThis.__sum = 0;
+        __a.onData = function (b) {
+            for (var i = 0; i < b.length; i++) globalThis.__sum += b[i];
+        };
+        "ok"}
+} -body {
+    set payload {}
+    for {set i 1} {$i < 256} {incr i} { append payload [binary format c $i] }
+    puts -nonewline $ch $payload
+    flush $ch
+    # 1 + 2 + ... + 255 = 32640. A faithful byte path lands exactly here.
+    js {String(globalThis.__sum)}
+} -cleanup {
+    close $ch
+    js {delete globalThis.__a; delete globalThis.__sum; "ok"}
+} -result 32640
+
+# ----- the async fileevent path: documented, not yet exercised -----
+test chan-fileevent-1.1 {readable fileevent fires on a JS write} -constraints eventLoop -setup {
+    set ch [wacl::chan open f1]
+    js {globalThis.__a = waclChan.attach("f1"); "ok"}
+} -body {
+    set ::fired 0
+    chan event $ch readable [list set ::fired 1]
+    js {__a.write("ping"); "ok"}
+    vwait ::fired
+    set ::fired
+} -cleanup {
+    close $ch
+    js {delete globalThis.__a; "ok"}
+} -result 1

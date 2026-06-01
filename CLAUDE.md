@@ -459,8 +459,36 @@ automation tokens don't carry; landing the file requires `git push`
 from a developer credential or a paste through the GH web UI.
 End-to-end runtime ~7 seconds.
 
-Currently only `wacl-json.test` exists. `wacl-dom.test`, `wacl-chan.test`,
-and a bridge test are the obvious follow-ups, each at the same rhythm.
+Three suites exist now: `wacl-json.test`, `wacl-chan.test`, and
+`wacl-dom.test`. A dedicated bridge test (the `::wacl::js::*` surface
+itself, not via a package) is the obvious remaining follow-up.
+
+Two constraint conventions came out of writing the chan/dom suites, and
+new suites should reuse them rather than reinvent:
+
+  - **`dom` constraint.** wacl::dom needs a real `document`, which the
+    headless node runner doesn't have. `wacl-dom.test` sets
+    `testConstraint dom` from `typeof document !== "undefined"` and tags
+    every test `-constraints dom`. Result: the *same file* runs for real
+    in the browser runner and skips cleanly headless. A fake DOM in the
+    headless runner was rejected as testing the fake, not the package;
+    real DOM-in-CI (jsdom) stays a deliberate, separate infra decision.
+
+  - **`eventLoop` constraint (set to 0).** Anything that needs a
+    deferred `chan postevent` or a bound DOM handler to actually *fire*
+    can't be tested in a harness that drives everything synchronously
+    inside one Tcl_Eval — the timer that would wake it can't run while
+    that Eval blocks, and a synchronous native dispatch trips the
+    re-entrant eval-fence by design. Those tests are written but tagged
+    `-constraints eventLoop` so they show as SKIPPED, keeping the gap
+    visible rather than silently absent. They wait on a runner that
+    pumps the event loop.
+
+  - **The chan byte contract is tested, NUL included.** `wacl-chan.test`
+    asserts bytes 1..255 round-trip with full fidelity *and* that NUL
+    truncates at the bridge (the js::call return crosses as a C string).
+    The truncation is a tested fact, not a latent surprise — see the
+    `chan-j2t-2.2` case.
 
 ## Packaging philosophy: zipfs as the lever, no package manager
 

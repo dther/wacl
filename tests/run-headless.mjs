@@ -87,10 +87,16 @@ sandbox.require(['tcl/wacl'], (m) => {
     const packageFiles = [
       'packages/wacl-json/pkgIndex.tcl',
       'packages/wacl-json/wacl-json.tcl',
+      'packages/wacl-dom/pkgIndex.tcl',
+      'packages/wacl-dom/wacl-dom.tcl',
+      'packages/wacl-chan/pkgIndex.tcl',
+      'packages/wacl-chan/wacl-chan.tcl',
     ];
     const testFiles = [
       'tests/all.tcl',
       'tests/wacl-json.test',
+      'tests/wacl-dom.test',
+      'tests/wacl-chan.test',
     ];
 
     for (const p of packageFiles) inject(p, demoDir);
