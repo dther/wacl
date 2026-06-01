@@ -163,12 +163,29 @@ notifier's "can't wait, would deadlock" signal (the stock select notifier
 returns it for the no-fds/no-timeout case); it's what makes `vwait` fail
 fast. For a finite timeout (a poll), 0 is correct.
 
+**Test acceptance, partly in.** `chan-fileevent-1.1` is rewritten to the
+real model — JS feeds bytes, `chan postevent` signals readable, `update`
+(the Tcl-side sibling of `Wacl_ServiceEvents`) pumps, the `fileevent`
+fires and drains the bytes — and now **passes** in both runners, no
+`vwait`. Headless CI is green (46 pass / 0 fail / 26 skip). The lone
+remaining `eventLoop` marker is `dom-bind-3.1`: a DOM event has no
+Tcl-side `postevent` to pump, and triggering it with `wacl::dom call …
+click` fires the listener synchronously inside the current `Wacl_Eval`,
+whose re-entrant `wacl.Eval` the fence refuses. It's now blocked
+specifically on step 2 (the eval-fence), not the notifier — skips
+headless, red in the browser.
+
 ## Next concrete steps
 
-1. Re-wire stdio as event-loop channels (real-time), then generalize to
-   runtime FIFOs.
-2. Narrow the eval-fence to nested-synchronous-`Wacl_Eval` only.
-3. Re-home `wacl::chan`'s deferral onto the pump instead of bare
-   `setTimeout`; expose the pump to the test harness and rewrite the
-   `eventLoop`-constrained tests to feed+pump+assert (no `vwait`), which
-   should flip them green as the acceptance signal.
+1. **Narrow the eval-fence** to genuinely nested-synchronous `Wacl_Eval`
+   only, so a DOM listener firing from the JS loop (and the `after 0`
+   advice the fence prints) actually works — which also flips
+   `dom-bind-3.1` green.
+2. **Real-time stdio as event-loop channels**, then runtime FIFOs. This
+   is not just a C/bridge change: **the demos are all `interp.Eval(line)`
+   -driven** (REPL, playground, tests page) and must be rewired to the
+   pump/channel model — stdin becomes a channel JS feeds and
+   `Wacl_ServiceEvents` drains, rather than a one-shot synchronous Eval
+   per line. Touches `js/preJsRequire.js` and all three demo pages.
+3. **Re-home `wacl::chan`'s JS-side deferral** onto `Wacl_ServiceEvents`
+   instead of bare `setTimeout`, once the pump is the canonical loop.

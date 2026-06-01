@@ -9,15 +9,20 @@
 # the package; skipping is the honest option until a real DOM-in-CI
 # (jsdom or similar) is wired deliberately.
 #
-# Two further things live behind the `eventLoop` constraint, also
-# skipped: anything that needs a bound handler to actually *fire*. A
-# native dispatch (elt.click()) fires synchronously inside the
-# Tcl_Eval frame that triggered it, which the re-entrant eval-fence
-# refuses by design; a real user event fires between frames, but
-# reproducing that needs a harness that pumps the event loop and
-# yields between dispatch and assertion. Handler registration
-# (bind/unbind) is exercised; handler invocation is left to the
-# event-loop runner.
+# One thing lives behind the `eventLoop` constraint: a bound handler
+# actually *firing*. Unlike wacl::chan — whose readable event we can now
+# post (`chan postevent`) and pump (`update`) entirely Tcl-side, so its
+# fileevent test passes — a DOM event has no Tcl-side postevent to pump,
+# and the only way to trigger it from a test is `wacl::dom call … click`,
+# a native dispatch that fires the listener *synchronously inside* the
+# Tcl_Eval frame that triggered it. The listener then calls
+# `wacl.Eval(script)`, which the re-entrant eval-fence refuses by design.
+# A real user event fires between frames and wouldn't re-enter, but
+# reproducing that needs the eval-fence narrowed (see docs/event-loop.md
+# step 3) and/or a harness that yields between dispatch and assertion.
+# So handler registration (bind/unbind) is exercised; handler invocation
+# stays the lone red marker, now blocked specifically on the eval-fence,
+# not the notifier.
 #
 # Fixtures: every test builds its sandbox under a single #wdt container
 # appended to <body>, with element ids/classes prefixed `wdt-` so a
@@ -268,7 +273,11 @@ test dom-event-1.1 {event field outside a handler is the empty string} -constrai
     wacl::dom event type
 } -result {}
 
-# ----- the firing path: registered, run only where the loop turns -----
+# ----- the firing path: the lone marker, blocked on the eval-fence -----
+# Skips headless (no DOM); in the browser it fails because `call click`
+# fires the listener synchronously inside this Tcl_Eval frame and the
+# listener's re-entrant wacl.Eval is refused by the fence. See the file
+# header and docs/event-loop.md step 3.
 test dom-bind-3.1 {a bound handler runs when its event fires} -constraints {eventLoop dom} -setup {
     fixture {<button id="wdt-btn">go</button>}
     set ::fired 0

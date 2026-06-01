@@ -1,17 +1,17 @@
 # wacl::chan — tcltest suite.
 #
-# Covers the synchronous surface of the reflected channel: open/names,
-# the EXISTS guard, close/finalize bookkeeping, and the byte round-trip
-# in both directions (JS->Tcl via `chan read`, Tcl->JS via `onData`).
+# Covers the reflected channel: open/names, the EXISTS guard,
+# close/finalize bookkeeping, the byte round-trip both directions
+# (JS->Tcl via `chan read`, Tcl->JS via `onData`), and — since the
+# main-thread notifier landed — readable-fileevent *dispatch* pumped
+# by `update`.
 #
-# What's deliberately NOT here: the async fileevent path. A JS-side
-# write defers its `chan postevent` through setTimeout(0), which only
-# fires once control returns to the host event loop — but this harness
-# drives everything synchronously inside a single Tcl_Eval, so a
-# `vwait` waiting on that postevent would block the very call the timer
-# needs to fire. That integration belongs to a runner that pumps the
-# event loop; the `eventLoop` constraint below keeps the gap honest and
-# visible (SKIPPED, not silently absent).
+# On `vwait`: it can't be used here. On the main thread a blocking
+# `vwait` can't yield to the JS loop that would produce the event, so
+# it raises `TCL EVENT NO_SOURCES` at once (see opt/waclNotifier.c).
+# The event-loop test below instead posts the readable event and pumps
+# it with `update` (the Tcl-side sibling of Wacl_ServiceEvents), the
+# idiom that actually works.
 #
 # This suite runs identically headless and in the browser — the channel
 # needs no DOM, only the waclChan surface the package installs itself.
@@ -19,8 +19,6 @@
 package require tcltest
 package require wacl::chan
 namespace import ::tcltest::*
-
-testConstraint eventLoop 1
 
 # Thin helper: evaluate a JS snippet through the host-granted bridge.
 proc js {script} { ::wacl::js::call eval $script }
@@ -196,17 +194,25 @@ test chan-t2j-2.1 {high bytes survive the Tcl->JS direction too} -setup {
     js {delete globalThis.__a; delete globalThis.__sum; "ok"}
 } -result 32640
 
-# ----- the async fileevent path: documented, not yet exercised -----
-test chan-fileevent-1.1 {readable fileevent fires on a JS write} -constraints eventLoop -setup {
+# ----- readable fileevent dispatch, pumped by `update` -----
+test chan-fileevent-1.1 {a readable fileevent dispatches JS-fed bytes when the loop is pumped} -setup {
     set ch [wacl::chan open f1]
     js {globalThis.__a = waclChan.attach("f1"); "ok"}
 } -body {
-    set ::fired 0
-    chan event $ch readable [list set ::fired 1]
+    # Event *dispatch*, not callback assignment (the thing the old vwait
+    # version couldn't reach): JS feeds bytes, we post a readable event
+    # the way the channel's async path eventually would, and `update`
+    # runs the registered fileevent, which drains the bytes. No `vwait` —
+    # it can't work on the main thread. The async JS->setTimeout->
+    # postevent *delivery* is a separate concern a synchronous test can't
+    # observe; posting directly here exercises the dispatch path itself.
+    set ::got ""
+    fileevent $ch readable {append ::got [read $ch]}
     js {__a.write("ping"); "ok"}
-    vwait ::fired
-    set ::fired
+    chan postevent $ch read
+    update
+    set ::got
 } -cleanup {
     close $ch
     js {delete globalThis.__a; "ok"}
-} -result 1
+} -result ping
