@@ -31,7 +31,7 @@ namespace import ::tcltest::*
 
 testConstraint dom \
     [::wacl::js::call eval {typeof document !== "undefined" ? "1" : "0"}]
-testConstraint eventLoop 0
+testConstraint eventLoop 1
 
 # (Re)build the fixture container with the given inner HTML.
 proc fixture {html} {
@@ -269,7 +269,7 @@ test dom-event-1.1 {event field outside a handler is the empty string} -constrai
 } -result {}
 
 # ----- the firing path: registered, run only where the loop turns -----
-test dom-bind-3.1 {a bound handler runs when its event fires} -constraints eventLoop -setup {
+test dom-bind-3.1 {a bound handler runs when its event fires} -constraints {eventLoop dom} -setup {
     fixture {<button id="wdt-btn">go</button>}
     set ::fired 0
 } -body {

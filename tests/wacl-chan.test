@@ -20,7 +20,7 @@ package require tcltest
 package require wacl::chan
 namespace import ::tcltest::*
 
-testConstraint eventLoop 0
+testConstraint eventLoop 1
 
 # Thin helper: evaluate a JS snippet through the host-granted bridge.
 proc js {script} { ::wacl::js::call eval $script }

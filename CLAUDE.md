@@ -515,17 +515,38 @@ new suites should reuse them rather than reinvent:
     headless runner was rejected as testing the fake, not the package;
     real DOM-in-CI (jsdom) stays a deliberate, separate infra decision.
 
-  - **`eventLoop` constraint (set to 0).** Anything that needs a
-    deferred `chan postevent` or a bound DOM handler to actually *fire*
-    can't be tested in a harness that drives everything synchronously
-    inside one Tcl_Eval — the timer that would wake it can't run while
-    that Eval blocks, and a synchronous native dispatch trips the
-    re-entrant eval-fence by design. Those tests are written but tagged
-    `-constraints eventLoop` so they show as SKIPPED, keeping the gap
-    visible rather than silently absent. They wait on a runner that
-    pumps the event loop.
+  - **`eventLoop` constraint (now set to 1 — these tests FAIL on
+    purpose).** Anything that needs a deferred `chan postevent` or a
+    bound DOM handler to actually *fire* can't be satisfied by the
+    current bridge, and rather than hide that behind a SKIP we let it
+    show red. `chan-fileevent-1.1` is the honest marker: headless and
+    in-browser alike it dies on `vwait ::fired` with
+    `would wait forever` (`errorCode TCL EVENT NO_SOURCES`) — there is
+    no event producer the notifier can see, so Tcl refuses the wait.
+    `dom-bind-3.1` carries `{eventLoop dom}` so it skips headless (no
+    DOM to be meaningful) and fails in the browser for the same class
+    of reason. CI is therefore deliberately red on the event-loop gap
+    until the semantics below are solved; treat a *new* red elsewhere
+    as the regression signal.
 
-    The likely shape of that runner (dther's sketch, not yet built): the
+    **Why this is two bugs, not one (dther's diagnosis).** First, the
+    re-entrant eval-fence forbids exactly the workaround its own error
+    text recommends: the fence says "use `after 0`/`after idle`," but
+    a synchronous native dispatch that reaches `after idle […]` then
+    re-enters `Tcl_Eval` and is refused — the advice is a dead end.
+    Second, and deeper: the test triggers the handler with
+    `wacl::dom call … click`, which *directly invokes* the listener.
+    That exercises callback *assignment*, not event *dispatch* — it's
+    testing the wrong thing. A real browser event fires from the JS
+    event loop between Eval frames; `call click` fires synchronously
+    inside the current one. So the fix is likely a combination: rethink
+    whether the eval-fence should refuse JS-driven re-entrancy at all
+    (or refuse it more surgically), and model JS events as something
+    that genuinely round-trips through the event loop rather than a
+    direct call. This is flagged as a pre-release must-solve.
+
+    The likely shape of an event-loop-pumping runner (dther's sketch,
+    not yet built): the
     test body arms a watchdog — `set ::done 0; after 5000 {set ::done -1}`
     — wires the real callback to `set ::done 1` and cancel the after,
     then `vwait ::done`. `vwait` is itself an event-loop pump, so the
