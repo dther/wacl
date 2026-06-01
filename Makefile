@@ -4,6 +4,8 @@
 #   make tcl          download and unpack Tcl 9 source under ./tcl/
 #   make minimal      build wacl-minimal.{js,wasm} and copy them into
 #                     wacl-minimal-demo/
+#   make packages     build the per-package release zips under ext/build/
+#   make test         build the package zips, then run the headless suite
 #   make clean        remove build artefacts but keep ./tcl/
 #   make distclean    also remove ./tcl/
 #   make fullclean    remove the Tcl source tar, too
@@ -43,9 +45,17 @@ WACLCC = \
     -I tcl/unix -I tcl/generic -I tcl/libtommath -I opt $(BCFLAGS) \
     -DSTATIC_BUILD=1 -DBUILD_tcl -DTCL_THREADS=0
 
-.PHONY: minimal clean distclean fullclean
+.PHONY: minimal packages test clean distclean fullclean
 
 default: minimal
+
+# The package pipeline lives in ext/. The headless suite loads packages
+# from the zips it produces, so `test` builds them first.
+packages:
+	$(MAKE) -C ext
+
+test: packages
+	node tests/run-headless.mjs
 
 tcl:
 	wget -nc $(TCLURL)

@@ -82,28 +82,35 @@ sandbox.require(['tcl/wacl'], (m) => {
       FS.writeFile(full, body);
     }
 
-    // Packages are first-party source at the repo root under packages/;
-    // the build pipeline in ext/ turns them into release zips, but for
-    // the test runtime we inject the source straight into the FS. Tests
-    // live at repo root under tests/.
-    const packageFiles = [
-      'packages/wacl-json/pkgIndex.tcl',
-      'packages/wacl-json/wacl-json.tcl',
-      'packages/wacl-dom/pkgIndex.tcl',
-      'packages/wacl-dom/wacl-dom.tcl',
-      'packages/wacl-chan/pkgIndex.tcl',
-      'packages/wacl-chan/wacl-chan.tcl',
-    ];
+    // Packages are loaded the way a real consumer loads them: from the
+    // release zips the ext/ pipeline builds, mounted via zipfs and added
+    // to auto_path. So this runner validates the actual shipped artifact
+    // — if a zip is malformed or a package fails to load from one, the
+    // suite goes red. Build them first with `make -C ext` (or `make
+    // test` at the repo root, which does both).
+    const pkgNames = ['wacl-json', 'wacl-dom', 'wacl-chan'];
+    const extBuild = path.join(root, 'ext', 'build');
+    try { FS.mkdirTree('/zips'); } catch (e) {}
+    for (const name of pkgNames) {
+      const zipPath = path.join(extBuild, name + '.zip');
+      if (!fs.existsSync(zipPath)) {
+        console.error(`missing ${zipPath} — run 'make -C ext' to build the package zips first`);
+        process.exit(2);
+      }
+      const dest = '/zips/' + name + '.zip';
+      FS.writeFile(dest, fs.readFileSync(zipPath));
+      interp.Eval(`tcl::zipfs::mount ${dest} //zipfs:/pkg/${name}`);
+      interp.Eval(`lappend auto_path //zipfs:/pkg/${name}`);
+    }
+
+    // Tests live at repo root under tests/.
     const testFiles = [
       'tests/all.tcl',
       'tests/wacl-json.test',
       'tests/wacl-dom.test',
       'tests/wacl-chan.test',
     ];
-
-    for (const p of packageFiles) inject(p, root);
-    for (const p of testFiles)    inject(p, root);
-    interp.Eval('lappend auto_path /packages');
+    for (const p of testFiles) inject(p, root);
 
     try {
       interp.Eval('source /tests/all.tcl');

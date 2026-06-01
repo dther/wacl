@@ -14,13 +14,17 @@
 # Once installed, the workflow runs on every push, every pull request,
 # and on workflow_dispatch from the Actions tab.
 #
-# Deliberately minimal: node, checkout, run-headless.mjs. We don't
-# rebuild the wasm — the artifacts in wacl-minimal-demo/ are what the
-# headless runner reads. A wasm rebuild would require pinning
-# emscripten 5.0.2 specifically and downloading ~200MB of tooling,
-# which we don't need for "did the test suite break." If/when we want
-# CI to verify the build itself, that's a separate workflow with its
-# own trigger.
+# Deliberately minimal: node, checkout, build the package zips, run
+# run-headless.mjs. We don't rebuild the wasm — the artifacts in
+# wacl-minimal-demo/ are what the headless runner reads. A wasm rebuild
+# would require pinning emscripten 5.0.2 specifically and downloading
+# ~200MB of tooling, which we don't need for "did the test suite break."
+# If/when we want CI to verify the build itself, that's a separate
+# workflow with its own trigger.
+#
+# We DO build the package zips (`make -C ext`, just zip + make) because
+# the headless runner loads packages from those zips — so the suite
+# also validates the actual release artifacts each run.
 #
 # Exit status: non-zero on any test failure or harness error. GitHub
 # then surfaces a red X on the commit and on the PR's checks list.
@@ -43,6 +47,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+
+      - name: Build package zips
+        run: make -C ext
 
       - name: Run wacl tests
         run: node tests/run-headless.mjs

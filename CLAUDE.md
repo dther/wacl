@@ -314,7 +314,7 @@ idiomatic workaround for the caller is `after 0 [list ...]`, which
 queues the inner script to run when the current evaluation stack
 unwinds.
 
-## The wacl-* packages (`wacl-minimal-demo/packages/`)
+## The wacl-* packages (`/packages/`)
 
 Three Tcl packages that demonstrate the bootstrap-then-seal pattern in
 miniature. Each one self-installs its JS shims at `package require` time
@@ -396,13 +396,48 @@ properties on the object stay mutable so `wacl.stdout = fn` etc.
 still work. `__interp` and `__wacl` remain on `window` as console
 aliases for shorter typing, but they're no longer load-bearing.
 
-**Layout.** `wacl-minimal-demo/packages/wacl-<name>/{pkgIndex.tcl,
-wacl-<name>.tcl}` — one main `.tcl` per package, code-as-documentation,
-no minification. The demo fetches them at boot, drops them into the
-in-wasm FS via `Module.FS.writeFile`, and `lappend auto_path /packages`.
-Once the JS-side `TclZipfs_Mount` cwrap lands (see punted), pages will
-ship packages as a zip and mount, but this fetch-then-write path stays
-viable for development.
+**Layout.** `/packages/wacl-<name>/{pkgIndex.tcl, wacl-<name>.tcl}` —
+first-party source at the repo root (moved out of the demo so the demo
+can consume them as released artifacts rather than carry the source).
+One main `.tcl` per package, code-as-documentation, no minification.
+The demo pages still fetch the loose `.tcl` files at boot
+(`Module.FS.writeFile` + `lappend auto_path /packages`) for development;
+once the JS-side `TclZipfs_Mount` cwrap lands, the demo will mount the
+released zips instead.
+
+## The `/ext` package pipeline
+
+`ext/Makefile` turns each `/packages/wacl-<name>/` into a release zip
+`ext/build/wacl-<name>.zip` (gitignored). The zip holds the package
+directory at its root — `wacl-json/pkgIndex.tcl`, … — so a consumer
+mounts it anywhere and `lappend auto_path <mountpoint>` finds it in the
+`wacl-<name>/` subdirectory, exactly like an on-disk auto_path entry:
+
+    tcl::zipfs::mount /path/to/wacl-dom.zip //zipfs:/pkg/wacl-dom
+    lappend auto_path //zipfs:/pkg/wacl-dom
+    package require wacl::dom
+
+`make packages` (or `make -C ext`) builds them; `make test` builds then
+runs the headless suite. The headless runner **loads packages from
+these zips, not from the loose source** — so every CI run validates the
+actual shipped artifact, not just the source tree. (The browser runner
+still uses the loose-file fetch path; it'll move to released zips with
+the JS mount bridge.)
+
+The same machinery will slice vendored tcllib modules into
+`tcllib-<module>.zip` artifacts on tcllib's own module boundaries (each
+subdir already ships a `pkgIndex.tcl`); not wired yet.
+
+**Release channel.** `.github/workflows/release-packages.yml` publishes
+the built zips to a single, continuously-overwritten pre-release tagged
+`unstable-bleeding`, giving stable download URLs
+(`…/releases/download/unstable-bleeding/wacl-dom.zip`) whose contents
+change without notice. The tag name, the pre-release flag, and the notes
+all shout "testing only." Stable, immutable `vX.Y` releases are a
+separate later workflow, added when a real downstream needs stabilising;
+the demo will default to those and keep the bleeding edge in a clearly
+marked corner. Triggers: `workflow_dispatch` + push to `master` (add a
+dev branch under `push: branches:` to publish the edge from there).
 
 ## Test harness (`tests/` + `wacl-minimal-demo/tests/` + CI)
 
@@ -422,9 +457,12 @@ runtime:
     grant we just bootstrapped). Prints a manual summary at the end.
 
   - **`tests/run-headless.mjs`** — CLI runner. Loads the wasm in a
-    node `vm` context, injects packages + tests into the in-wasm FS,
-    sources `all.tcl`, exits non-zero on any failure. Used by CI;
-    locally it's faster than reloading the browser page.
+    node `vm` context, mounts the `ext/build/wacl-*.zip` package
+    artifacts via zipfs (so the suite runs against the real shipped
+    zips — build them first with `make -C ext`, or use `make test`),
+    injects the test files, sources `all.tcl`, exits non-zero on any
+    failure. Used by CI; locally it's faster than reloading the browser
+    page.
 
   - **`wacl-minimal-demo/tests/index.html`** — browser runner. Live
     log streams tcltest's output as it executes, classified into
@@ -450,14 +488,17 @@ Two implementation choices worth knowing before extending the suite:
     mismatch. The `-match glob -result {json::get:*}` style adds an
     honest assertion that the message points at the right command.
 
-**CI.** `.github/workflows/tests.yml` runs `node tests/run-headless.mjs`
-on every push, every pull request, and on `workflow_dispatch` from the
-Actions tab. No wasm rebuild — uses the committed artifacts in
-`wacl-minimal-demo/`. Workflows under `.github/workflows/` require the
-GitHub `workflow` scope on the pushing token, which the in-session
-automation tokens don't carry; landing the file requires `git push`
-from a developer credential or a paste through the GH web UI.
-End-to-end runtime ~7 seconds.
+**CI.** `.github/workflows/tests.yml` builds the package zips
+(`make -C ext`) then runs `node tests/run-headless.mjs` on every push,
+every pull request, and on `workflow_dispatch`. No wasm rebuild — uses
+the committed artifacts in `wacl-minimal-demo/`; the only build is the
+cheap zip step the runner needs. `release-packages.yml` is the second
+workflow (the `unstable-bleeding` channel, above). Workflows under
+`.github/workflows/` normally require the GitHub `workflow` scope on the
+pushing token, which the in-session automation tokens don't always
+carry; when they lack it, landing these files needs a `git push` from a
+developer credential or a paste through the GH web UI. End-to-end test
+runtime ~7 seconds.
 
 Three suites exist now: `wacl-json.test`, `wacl-chan.test`, and
 `wacl-dom.test`. A dedicated bridge test (the `::wacl::js::*` surface
