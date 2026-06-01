@@ -700,14 +700,26 @@ Three pages, each self-contained, no framework, AMD shim only.
   other through a stubs-table" pattern, mature, per-interp, cleaned
   up at interp teardown. `Tcl_GetAssocData` is the side door for
   more dynamic patterns.
-- **Self-pipe wakeup for `tclSelectNotfy.c` + TIP submission.** Tcl 9's
-  notifier uses `pthread_kill` to wake the notifier thread; we work
-  around with `TCL_THREADS=0`. The right upstream fix is a configure
-  check for `pthread_kill` plus a self-pipe fallback when it's absent
-  — small TIP, covers wasm and any other "threads but no signals"
-  target. Order: ship working browser Tcl 9 → write the patch → run
-  it against Tcl's own test suite → file the TIP with the working
-  downstream as evidence.
+- **Event-loop integration (primary architecture target).** See
+  `docs/event-loop.md` for the full design. Short version: integrate the
+  JS and Tcl event loops on the **main thread** via a custom non-blocking
+  notifier (`Tcl_SetNotifier`, no Tcl-source patch) that JS pumps with
+  `Tcl_ServiceAll`/`Tcl_DoOneEvent(TCL_DONT_WAIT)`, carrying events as
+  bytes on in-memory channels (real-time stdio, then runtime FIFOs).
+  Main-thread-first because that's where sound / WebGL / gamepad input
+  (the SDL3 surface, what games need) live — a DOM-less worker can't
+  reach them, so Tk is the floor, not the ceiling. Worker mode is the
+  secondary, clean-separation path.
+- **Notifier / `TCL_THREADS=0` — corrected.** Earlier notes here claimed
+  Tcl 9's notifier "uses `pthread_kill` to wake the notifier thread."
+  Verified false against 9.0.3: the notifier thread is woken by a
+  self-pipe (`triggerPipe`); `pthread_kill` appears only in
+  `TclAsyncNotifier`, the async-signal re-routing path. `TCL_THREADS=0`
+  is needed for a **link-time** reason (that signal path references
+  `pthread_kill`, absent in our non-`-pthread` Emscripten build), not a
+  runtime wakeup dependency. The custom-notifier route above sidesteps
+  the whole platform notifier anyway. A self-pipe-fallback TIP is still
+  worth filing upstream for "threads but no signals" targets.
 - **Rename to SurfTcl.** Holding until the demo has DOM manipulation
   and feels like a complete pitch. When the rename happens it touches
   the C symbol prefix (`Wacl_*` → `Surftcl_*` or similar), the package
