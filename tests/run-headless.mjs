@@ -82,8 +82,10 @@ sandbox.require(['tcl/wacl'], (m) => {
       FS.writeFile(full, body);
     }
 
-    // Packages live under the demo dir (that's where the deployable
-    // copies sit). Tests live at repo root under tests/.
+    // Packages are first-party source at the repo root under packages/;
+    // the build pipeline in ext/ turns them into release zips, but for
+    // the test runtime we inject the source straight into the FS. Tests
+    // live at repo root under tests/.
     const packageFiles = [
       'packages/wacl-json/pkgIndex.tcl',
       'packages/wacl-json/wacl-json.tcl',
@@ -99,7 +101,7 @@ sandbox.require(['tcl/wacl'], (m) => {
       'tests/wacl-chan.test',
     ];
 
-    for (const p of packageFiles) inject(p, demoDir);
+    for (const p of packageFiles) inject(p, root);
     for (const p of testFiles)    inject(p, root);
     interp.Eval('lappend auto_path /packages');
 

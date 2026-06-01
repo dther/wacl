@@ -502,7 +502,7 @@ require(["tcl/wacl"], function (m) {
     ];
 
     Promise.all(packageFiles.map((p) =>
-      fetch("../" + p).then((r) => {
+      fetch("../../" + p).then((r) => {
         if (!r.ok) throw new Error(p + ": " + r.status);
         return r.text();
       }).then((body) => {

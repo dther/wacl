@@ -168,17 +168,17 @@ function appendLog(text, isStderr) {
 }
 
 // Each entry: [URL relative to this page, destination in the in-wasm FS].
-// Packages live under wacl-minimal-demo/, one level up — ../packages/...
-// Tests live at the repo root, two levels up — ../../tests/...
+// Packages are first-party source at the repo root, two levels up —
+// ../../packages/... Tests also live at the repo root — ../../tests/...
 // Decoupling source URL from destination path keeps the relative-URL
 // awkwardness from leaking into the source-on-Tcl-side paths.
 const filesToInject = [
-  ["../packages/wacl-json/pkgIndex.tcl",   "/packages/wacl-json/pkgIndex.tcl"],
-  ["../packages/wacl-json/wacl-json.tcl",  "/packages/wacl-json/wacl-json.tcl"],
-  ["../packages/wacl-dom/pkgIndex.tcl",    "/packages/wacl-dom/pkgIndex.tcl"],
-  ["../packages/wacl-dom/wacl-dom.tcl",    "/packages/wacl-dom/wacl-dom.tcl"],
-  ["../packages/wacl-chan/pkgIndex.tcl",   "/packages/wacl-chan/pkgIndex.tcl"],
-  ["../packages/wacl-chan/wacl-chan.tcl",  "/packages/wacl-chan/wacl-chan.tcl"],
+  ["../../packages/wacl-json/pkgIndex.tcl", "/packages/wacl-json/pkgIndex.tcl"],
+  ["../../packages/wacl-json/wacl-json.tcl","/packages/wacl-json/wacl-json.tcl"],
+  ["../../packages/wacl-dom/pkgIndex.tcl",  "/packages/wacl-dom/pkgIndex.tcl"],
+  ["../../packages/wacl-dom/wacl-dom.tcl",  "/packages/wacl-dom/wacl-dom.tcl"],
+  ["../../packages/wacl-chan/pkgIndex.tcl", "/packages/wacl-chan/pkgIndex.tcl"],
+  ["../../packages/wacl-chan/wacl-chan.tcl","/packages/wacl-chan/wacl-chan.tcl"],
   ["../../tests/all.tcl",                  "/tests/all.tcl"],
   ["../../tests/wacl-json.test",           "/tests/wacl-json.test"],
   ["../../tests/wacl-dom.test",            "/tests/wacl-dom.test"],

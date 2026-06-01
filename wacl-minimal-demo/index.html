@@ -309,8 +309,10 @@ require(["tcl/wacl"], function (wacl) {
     ];
 
     function installPackages() {
+      // Package source lives at the repo root (../packages/…), one level
+      // up from the demo; the in-wasm destination stays /packages/….
       return Promise.all(packageFiles.map((p) =>
-        fetch(p).then((r) => {
+        fetch("../" + p).then((r) => {
           if (!r.ok) throw new Error(p + ": " + r.status);
           return r.text();
         }).then((body) => {
