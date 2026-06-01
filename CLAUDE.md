@@ -484,6 +484,21 @@ new suites should reuse them rather than reinvent:
     visible rather than silently absent. They wait on a runner that
     pumps the event loop.
 
+    The likely shape of that runner (dther's sketch, not yet built): the
+    test body arms a watchdog — `set ::done 0; after 5000 {set ::done -1}`
+    — wires the real callback to `set ::done 1` and cancel the after,
+    then `vwait ::done`. `vwait` is itself an event-loop pump, so the
+    deferred `chan postevent` / DOM dispatch gets a chance to fire; the
+    `after 5000` is the timeout floor that keeps a missed event from
+    hanging CI forever (`-1` then reads as a failure rather than a
+    deadlock). The open question is whether the headless node runner's
+    Tcl notifier actually wakes on the JS-side `setTimeout` that drives
+    those deferrals — under `TCL_THREADS=0` the notifier and the JS
+    macrotask queue are the same single thread, so a blocking `vwait`
+    inside one synchronous `Eval` may still starve the timer that would
+    wake it. Browser-side the same `vwait` has the page event loop
+    underneath it and is the more promising first target.
+
   - **The chan byte contract is tested, NUL included.** `wacl-chan.test`
     asserts bytes 1..255 round-trip with full fidelity *and* that NUL
     truncates at the bridge (the js::call return crosses as a C string).
