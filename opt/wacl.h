@@ -16,4 +16,13 @@ int  Wacl_Eval(Tcl_Interp *interp, const char *name);
 void Wacl_SetJsResultString(const char *s);
 void Wacl_AppendJsErrorCodeElement(const char *s);
 
+/*
+ * Main-thread event-loop integration (opt/waclNotifier.c). Wacl_InstallNotifier
+ * swaps in a non-blocking notifier and must run before the notifier is first
+ * used (call it at the top of main). Wacl_ServiceEvents is the JS-driven pump:
+ * it drains all ready events without blocking and returns the count.
+ */
+void Wacl_InstallNotifier(void);
+int  Wacl_ServiceEvents(void);
+
 #endif /* _WACL_H_ */

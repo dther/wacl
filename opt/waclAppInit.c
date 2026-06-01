@@ -31,6 +31,14 @@ Wacl_GetInterp()
 int
 main(int argc, char** argv)
 {
+    /*
+     * Swap in the non-blocking main-thread notifier before anything touches
+     * the notifier (it initialises lazily on first use). From here on Tcl
+     * never blocks waiting for an event; the JS side drives servicing via
+     * Wacl_ServiceEvents. See opt/waclNotifier.c.
+     */
+    Wacl_InstallNotifier();
+
     mainInterp = Tcl_CreateInterp();
 
     /*

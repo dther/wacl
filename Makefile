@@ -38,7 +38,8 @@ WACLEXPORTS = \
         '_Wacl_RegisterJsFn',\
         '_Wacl_RevokeJsFn',\
         '_Wacl_SetJsResultString',\
-        '_Wacl_AppendJsErrorCodeElement'\
+        '_Wacl_AppendJsErrorCodeElement',\
+        '_Wacl_ServiceEvents'\
     ]"
 
 WACLCC = \
@@ -83,10 +84,11 @@ tcl/unix/libtcl9.0.a: tcl/unix/Makefile
 
 minimal: tcl/unix/libtcl9.0.a
 	emcc -c $(WACLCC) opt/wacl.c -o wacl.o
+	emcc -c $(WACLCC) opt/waclNotifier.c -o waclNotifier.o
 	emcc -c $(WACLCC) opt/waclAppInit.c -o waclAppInit.o
 	cp js/preJsRequire.js preGeneratedJs.js
 	emcc $(WASMFLAGS_MINIMAL) $(WACLEXPORTS) \
-	    wacl.o waclAppInit.o tcl/unix/libtcl9.0.a \
+	    wacl.o waclNotifier.o waclAppInit.o tcl/unix/libtcl9.0.a \
 	    -o wacl-minimal.js
 	cp wacl-minimal.js wacl-minimal.wasm wacl-minimal-demo/
 

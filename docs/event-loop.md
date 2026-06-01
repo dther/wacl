@@ -144,16 +144,31 @@ advice becomes actually true instead of a dead end.
   hash, no relation to the file format): maps onto `SharedArrayBuffer` +
   `Atomics`-based locking. Worker-mode concern; later.
 
-## Next concrete steps (when we resume)
+## Progress
 
-1. Add a custom notifier (`Tcl_SetNotifier`) with a non-blocking
-   `waitForEventProc` and `setTimerProc` → `setTimeout`; export a
-   `Wacl_ServiceEvents` C entry that wraps `Tcl_ServiceAll` /
-   `Tcl_DoOneEvent(TCL_DONT_WAIT)`; have the JS side call it on each loop
-   turn. Set `TCL_SERVICE_ALL`.
-2. Re-wire stdio as event-loop channels (real-time), then generalize to
+**Step 1 done (spike, `opt/waclNotifier.c`).** Custom non-blocking
+notifier installed via `Tcl_SetNotifier` at the top of `main`, plus an
+exported `Wacl_ServiceEvents` that drains ready events with
+`Tcl_DoOneEvent(TCL_ALL_EVENTS | TCL_DONT_WAIT)`. Verified in the wasm
+runtime: `after 0` + a `Wacl_ServiceEvents()` call fires the timer (pump
+dispatches); a channel fed from JS fires its `fileevent` callback with no
+`vwait`; and `vwait` on a JS-gated event now raises `NO_SOURCES`
+*immediately* instead of hanging. No regression in the suite (45 pass).
+
+**Lesson, the hard way:** `waitForEventProc` must return **-1** when
+asked to block indefinitely (`timePtr == NULL`), not 0. Returning 0
+("timed out, nothing happened") makes a blocking `Tcl_DoOneEvent` loop
+and ask again — an infinite busy-spin that hangs the page. -1 is the
+notifier's "can't wait, would deadlock" signal (the stock select notifier
+returns it for the no-fds/no-timeout case); it's what makes `vwait` fail
+fast. For a finite timeout (a poll), 0 is correct.
+
+## Next concrete steps
+
+1. Re-wire stdio as event-loop channels (real-time), then generalize to
    runtime FIFOs.
-3. Narrow the eval-fence to nested-synchronous-`Wacl_Eval` only.
-4. Re-home `wacl::chan`'s deferral onto the pump instead of bare
-   `setTimeout`, and flip the `eventLoop`-constrained tests green as the
-   acceptance signal.
+2. Narrow the eval-fence to nested-synchronous-`Wacl_Eval` only.
+3. Re-home `wacl::chan`'s deferral onto the pump instead of bare
+   `setTimeout`; expose the pump to the test harness and rewrite the
+   `eventLoop`-constrained tests to feed+pump+assert (no `vwait`), which
+   should flip them green as the acceptance signal.
