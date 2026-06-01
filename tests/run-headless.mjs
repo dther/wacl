@@ -109,6 +109,7 @@ sandbox.require(['tcl/wacl'], (m) => {
       'tests/wacl-json.test',
       'tests/wacl-dom.test',
       'tests/wacl-chan.test',
+      'tests/wacl-bridge.test',
     ];
     for (const p of testFiles) inject(p, root);
 

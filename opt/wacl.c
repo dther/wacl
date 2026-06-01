@@ -257,35 +257,27 @@ Wacl_Init(Tcl_Interp *interp)
 /*
  * Tcl 9 turned Tcl_Eval and Tcl_GetStringResult into header macros (the
  * former expands to Tcl_EvalEx, the latter to Tcl_GetString of the obj
- * result). The wacl JS bridge has been reworked to cwrap these instead.
+ * result). The wacl JS bridge cwraps these instead.
  *
- * The Wacl_Eval wrapper also fences re-entrant calls from JS. JS is
- * single-threaded so timers/promises can't produce concurrent Eval
- * calls, but a synchronous chain — JS Eval -> Tcl puts -> FS.init
- * output sink -> JS Eval — IS possible and would have the two frames
- * share one interpreter's result, errorInfo, and package init state.
- * Tcl handles nested evaluation fine when *Tcl* drives it (after,
- * fileevent, command callbacks all go through Tcl_DoOneEvent /
- * Tcl_EvalObjEx, not through our wrapper); only the JS-imposed flavour
- * needs to be refused. The idiomatic workaround on the caller's side
- * is `after 0 [list ...]`, which queues the inner script to run when
- * the current evaluation stack unwinds.
+ * Wacl_Eval is a thin wrapper — no re-entrancy fence. JS and Tcl share one
+ * thread and cooperate on one event loop, so a JS callback invoked mid-Tcl
+ * (via ::wacl::js::call) may call straight back into Wacl_Eval. That is
+ * fine: Tcl re-enters itself constantly — command substitution, `eval`,
+ * `fileevent` callbacks — and is built for it. We deliberately do NOT
+ * save/restore interpreter state around a nested call: a JS-side failure
+ * that propagates should leave its errorInfo/errorCode intact, so the Tcl
+ * side can `catch` it or let it bubble to the failure surface. Silent
+ * isolation — papering over a nested error to keep frames "clean" — is the
+ * one thing we reject. Runaway self-recursion is caught by Tcl's own
+ * nesting limit ("too many nested evaluations (infinite loop?)"), a clean
+ * Tcl error rather than a wasm stack overflow; we don't need our own wall.
  */
-static int waclEvalDepth = 0;
 int
 Wacl_Eval(Tcl_Interp *interp, const char *script)
 {
-    if (waclEvalDepth > 0) {
-        Tcl_SetObjResult(interp, Tcl_NewStringObj(
-            "wacl: re-entrant Wacl_Eval from JS is not supported; "
-            "queue the call with `after 0 [list ...]` instead", -1));
-        return TCL_ERROR;
-    }
-    waclEvalDepth++;
-    int rc = Tcl_EvalEx(interp, script, -1, 0);
-    waclEvalDepth--;
-    return rc;
+    return Tcl_EvalEx(interp, script, -1, 0);
 }
+
 
 const char *
 Wacl_GetStringResult(Tcl_Interp *interp)
