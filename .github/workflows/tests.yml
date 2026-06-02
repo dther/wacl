@@ -1,4 +1,4 @@
-# GitHub Actions workflow for the wacl test suite.
+# GitHub Actions workflow for the surftcl test suite.
 #
 # This file lives at `tests/github-workflow.yml.example` because the
 # automation token used to push commits from inside dev sessions
@@ -8,7 +8,7 @@
 #     mv tests/github-workflow.yml.example .github/workflows/tests.yml
 #     git add .github/workflows/tests.yml
 #     git rm  tests/github-workflow.yml.example
-#     git commit -m "ci: install the wacl test-suite workflow"
+#     git commit -m "ci: install the surftcl test-suite workflow"
 #     git push
 #
 # Once installed, the workflow runs on every push, every pull request,
@@ -51,5 +51,5 @@ jobs:
       - name: Build package zips
         run: make -C ext
 
-      - name: Run wacl tests
+      - name: Run surftcl tests
         run: node tests/run-headless.mjs

@@ -5,9 +5,9 @@
 # tagged `unstable-bleeding`. The point is a set of STABLE DOWNLOAD URLs
 # that always serve the latest build:
 #
-#     https://github.com/dther/wacl/releases/download/unstable-bleeding/wacl-dom.zip
-#     https://github.com/dther/wacl/releases/download/unstable-bleeding/wacl-json.zip
-#     https://github.com/dther/wacl/releases/download/unstable-bleeding/wacl-chan.zip
+#     https://github.com/dther/surftcl/releases/download/unstable-bleeding/wacl-dom.zip
+#     https://github.com/dther/surftcl/releases/download/unstable-bleeding/wacl-json.zip
+#     https://github.com/dther/surftcl/releases/download/unstable-bleeding/wacl-chan.zip
 #
 # These are explicitly NOT for general downstream use — the tag name,
 # the "pre-release" flag, and the release notes all say so. When a real
@@ -20,7 +20,7 @@
 # the Tcl-side shape):
 #     tcl::zipfs::mount /path/to/wacl-dom.zip //zipfs:/pkg/wacl-dom
 #     lappend auto_path //zipfs:/pkg/wacl-dom
-#     package require wacl::dom
+#     package require surftcl::dom
 #
 # Triggers: manual dispatch, and push to master. To also publish from a
 # development branch, add it under `push: branches:` — the rolling tag
@@ -64,7 +64,7 @@ jobs:
 
               tcl::zipfs::mount /path/to/wacl-dom.zip //zipfs:/pkg/wacl-dom
               lappend auto_path //zipfs:/pkg/wacl-dom
-              package require wacl::dom
+              package require surftcl::dom
           NOTES
 
           # Recreate the rolling tag/release at this commit, then upload

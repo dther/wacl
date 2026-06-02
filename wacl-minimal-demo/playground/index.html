@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>wacl playground — DOM from Tcl</title>
+<title>surftcl playground — DOM from Tcl</title>
 
 <!--
-  The playground sits one directory below the wacl artifacts. Adjust the
+  The playground sits one directory below the surftcl artifacts. Adjust the
   AMD shim's require.toUrl so it finds wacl.wasm via the symlink at
   ../wacl.wasm. Everything else in the page (package fetches, etc.) uses
   explicit `../` prefixes.
@@ -299,8 +299,8 @@ header a:hover { color: var(--accent); }
 
 <div class="app">
   <header>
-    <h1>wacl playground</h1>
-    <span class="muted">DOM from Tcl, via <code>::wacl::dom</code></span>
+    <h1>surftcl playground</h1>
+    <span class="muted">DOM from Tcl, via <code>::surftcl::dom</code></span>
     <span class="links">
       <a href="../">REPL →</a>
     </span>
@@ -339,7 +339,7 @@ header a:hover { color: var(--accent); }
 </div>
 
 <div class="loading" id="loading">
-  loading wacl<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span>
+  loading surftcl<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span>
 </div>
 
 <!--
@@ -391,28 +391,28 @@ function appendOut(text, kind) {
 const examples = [
   { name: "light odds", script:
 `# Light up odd-numbered cards using each + :this.
-wacl::dom each ".card" {
-    if {[wacl::dom prop :this textContent] % 2} {
-        wacl::dom call :this classList.add lit
+surftcl::dom each ".card" {
+    if {[surftcl::dom prop :this textContent] % 2} {
+        surftcl::dom call :this classList.add lit
     } else {
-        wacl::dom call :this classList.remove lit
+        surftcl::dom call :this classList.remove lit
     }
 }` },
 
   { name: "rainbow hues", script:
 `# Re-assign each card's --hue, walking the colour wheel.
 set i 0
-wacl::dom each ".card" {
-    wacl::dom style :this --hue [expr {$i * 23 % 360}]
+surftcl::dom each ".card" {
+    surftcl::dom style :this --hue [expr {$i * 23 % 360}]
     incr i
 }` },
 
   { name: "spin all", script:
 `# Toggle the .spin animation on every card.
-set state [wacl::dom prop "#card-1" className]
+set state [surftcl::dom prop "#card-1" className]
 set op [expr {[string match *spin* $state] ? "remove" : "add"}]
-wacl::dom each ".card" {
-    wacl::dom call :this classList.$op spin
+surftcl::dom each ".card" {
+    surftcl::dom call :this classList.$op spin
 }` },
 
   { name: "dim non-primes", script:
@@ -424,12 +424,12 @@ proc prime n {
     }
     return 1
 }
-wacl::dom each ".card" {
-    set n [wacl::dom prop :this textContent]
+surftcl::dom each ".card" {
+    set n [surftcl::dom prop :this textContent]
     if {[prime $n]} {
-        wacl::dom call :this classList.remove dim
+        surftcl::dom call :this classList.remove dim
     } else {
-        wacl::dom call :this classList.add dim
+        surftcl::dom call :this classList.add dim
     }
 }` },
 
@@ -437,9 +437,9 @@ wacl::dom each ".card" {
 `# Bind every card's click to a toggle of its lit state.
 # :this in the bind selector means "the iterated each element";
 # :this inside the bound script means "the bound element".
-wacl::dom each ".card" {
-    wacl::dom bind :this click {
-        wacl::dom call :this classList.toggle lit
+surftcl::dom each ".card" {
+    surftcl::dom bind :this click {
+        surftcl::dom call :this classList.toggle lit
     }
 }
 puts "16 cards now respond to clicks"` },
@@ -447,7 +447,7 @@ puts "16 cards now respond to clicks"` },
   { name: "add task", script:
 `# Append a task with the current time.
 set t [clock format [clock seconds] -format %H:%M:%S]
-wacl::dom append "#tasks" "<li>noted at $t</li>"` },
+surftcl::dom append "#tasks" "<li>noted at $t</li>"` },
 
   { name: "insert all four", script:
 `# All four insertAdjacentHTML positions, around #tasks.
@@ -455,24 +455,24 @@ wacl::dom append "#tasks" "<li>noted at $t</li>"` },
 # prepend -> first child
 # append  -> last child
 # after   -> next sibling (needs a parent)
-wacl::dom before  "#tasks" "<h3 style='color:var(--accent);margin:0.5rem 0 0'>Today</h3>"
-wacl::dom prepend "#tasks" "<li class='done'>★ pinned to top</li>"
-wacl::dom append  "#tasks" "<li>tacked on at end</li>"
-wacl::dom after   "#tasks" "<p style='color:var(--muted);margin:0.25rem 0'>(noted via wacl::dom after)</p>"` },
+surftcl::dom before  "#tasks" "<h3 style='color:var(--accent);margin:0.5rem 0 0'>Today</h3>"
+surftcl::dom prepend "#tasks" "<li class='done'>★ pinned to top</li>"
+surftcl::dom append  "#tasks" "<li>tacked on at end</li>"
+surftcl::dom after   "#tasks" "<p style='color:var(--muted);margin:0.25rem 0'>(noted via surftcl::dom after)</p>"` },
 
   { name: "strike tasks", script:
 `# Make existing tasks toggle their done state on click.
-wacl::dom each "#tasks > li" {
-    wacl::dom bind :this click {
-        wacl::dom call :this classList.toggle done
+surftcl::dom each "#tasks > li" {
+    surftcl::dom bind :this click {
+        surftcl::dom call :this classList.toggle done
     }
 }` },
 
   { name: "reset", script:
 `# Clear all the card classes back to default.
-wacl::dom each ".card" {
+surftcl::dom each ".card" {
     foreach c {lit dim spin} {
-        wacl::dom call :this classList.remove $c
+        surftcl::dom call :this classList.remove $c
     }
 }` }
 ];
@@ -484,7 +484,7 @@ require(["tcl/wacl"], function (m) {
 
     // The playground is a development surface. We grant `eval` for the
     // package install and leave it granted so users can poke from the
-    // editor. A real app would `::wacl::js::revoke eval` after the
+    // editor. A real app would `::surftcl::js::revoke eval` after the
     // requires it cares about — see the REPL demo for the seal flow.
     interp.js.register("alert", function (args) { window.alert(args.join(" ")); });
     interp.js.register("eval", function (args) {
@@ -513,15 +513,15 @@ require(["tcl/wacl"], function (m) {
       })
     )).then(() => {
       interp.Eval("lappend auto_path /packages");
-      interp.Eval("package require wacl::dom");
+      interp.Eval("package require surftcl::dom");
 
       // `update` yields to the JS event loop (Asyncify-backed), so editor
       // code can keep the page live across long work. See the REPL for the
       // rationale; same six-line wrapper.
       interp.Eval(`
-        namespace eval ::wacl::OLD {}
-        rename update ::wacl::OLD::update
-        proc update {args} { ::wacl::OLD::update {*}$args; ::wacl::js::yield }
+        namespace eval ::surftcl::OLD {}
+        rename update ::surftcl::OLD::update
+        proc update {args} { ::surftcl::OLD::update {*}$args; ::surftcl::js::yield }
       `);
 
       // Examples ribbon.

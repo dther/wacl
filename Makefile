@@ -1,4 +1,4 @@
-# Wacl build — Tcl 9 in the browser.
+# SurfTcl build — Tcl 9 in the browser.
 #
 # Targets that matter:
 #   make tcl          download and unpack Tcl 9 source under ./tcl/
@@ -29,20 +29,20 @@ WASMFLAGS_MINIMAL = \
     -s EXPORTED_RUNTIME_METHODS='["cwrap","ccall","FS","addFunction","removeFunction","getValue","UTF8ToString"]' \
     --embed-file tcl/unix/libtcl9.0.3.zip@/lib/tcl.zip
 
-WACLEXPORTS = \
+SURFTCLEXPORTS = \
     -s EXPORTED_FUNCTIONS="[\
         '_main',\
-        '_Wacl_GetInterp',\
-        '_Wacl_Eval',\
-        '_Wacl_GetStringResult',\
-        '_Wacl_RegisterJsFn',\
-        '_Wacl_RevokeJsFn',\
-        '_Wacl_SetJsResultString',\
-        '_Wacl_AppendJsErrorCodeElement',\
-        '_Wacl_ServiceEvents'\
+        '_SurfTcl_GetInterp',\
+        '_SurfTcl_Eval',\
+        '_SurfTcl_GetStringResult',\
+        '_SurfTcl_RegisterJsFn',\
+        '_SurfTcl_RevokeJsFn',\
+        '_SurfTcl_SetJsResultString',\
+        '_SurfTcl_AppendJsErrorCodeElement',\
+        '_SurfTcl_ServiceEvents'\
     ]"
 
-WACLCC = \
+SURFTCLCC = \
     -I tcl/unix -I tcl/generic -I tcl/libtommath -I opt $(BCFLAGS) \
     -DSTATIC_BUILD=1 -DBUILD_tcl -DTCL_THREADS=0
 
@@ -82,8 +82,8 @@ tcl/unix/Makefile: tcl
 tcl/unix/libtcl9.0.a: tcl/unix/Makefile
 	cd tcl/unix && emmake make libtcl9.0.a
 
-# The baseline build is Asyncify-enabled: -DWACL_ASYNCIFY turns on
-# `::wacl::js::yield` (emscripten_sleep-backed) and -sASYNCIFY instruments
+# The baseline build is Asyncify-enabled: -DSURFTCL_ASYNCIFY turns on
+# `::surftcl::js::yield` (emscripten_sleep-backed) and -sASYNCIFY instruments
 # the module so a synchronous Tcl call can unwind to the JS event loop and
 # resume in place. This is what makes `interp.Eval` async and the `update`
 # wrapper work — the event-loop story SurfTcl is built on (docs/event-loop.md).
@@ -92,13 +92,13 @@ tcl/unix/libtcl9.0.a: tcl/unix/Makefile
 # lighter successor once it's cross-browser — the C and the `update` wrapper
 # are mechanism-agnostic, so that swap is localized.
 minimal: tcl/unix/libtcl9.0.a
-	emcc -c $(WACLCC) -DWACL_ASYNCIFY opt/wacl.c -o wacl.o
-	emcc -c $(WACLCC) -DWACL_ASYNCIFY opt/waclNotifier.c -o waclNotifier.o
-	emcc -c $(WACLCC) opt/waclAppInit.c -o waclAppInit.o
+	emcc -c $(SURFTCLCC) -DSURFTCL_ASYNCIFY opt/wacl.c -o surftcl.o
+	emcc -c $(SURFTCLCC) -DSURFTCL_ASYNCIFY opt/waclNotifier.c -o waclNotifier.o
+	emcc -c $(SURFTCLCC) opt/waclAppInit.c -o waclAppInit.o
 	cp js/preJsRequire.js preGeneratedJs.js
-	emcc $(WASMFLAGS_MINIMAL) $(WACLEXPORTS) \
+	emcc $(WASMFLAGS_MINIMAL) $(SURFTCLEXPORTS) \
 	    -sASYNCIFY -sASYNCIFY_STACK_SIZE=1048576 \
-	    wacl.o waclNotifier.o waclAppInit.o tcl/unix/libtcl9.0.a \
+	    surftcl.o waclNotifier.o waclAppInit.o tcl/unix/libtcl9.0.a \
 	    -o wacl-minimal.js
 	cp wacl-minimal.js wacl-minimal.wasm wacl-minimal-demo/
 

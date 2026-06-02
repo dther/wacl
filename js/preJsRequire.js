@@ -74,7 +74,7 @@ define('tcl/wacl', function () {
   // ---- JS function registry ------------------------------------------------
   //
   // The host (page) grants JS functions to the inner Tcl interp by name. Tcl
-  // calls them via `::wacl::js::call NAME ARG_LIST`; the list elements arrive
+  // calls them via `::surftcl::js::call NAME ARG_LIST`; the list elements arrive
   // on the JS side as a single array argument of strings. The Tcl bridge is
   // type-blind — all marshalling and any application-level type checking is
   // up to the JS function. See opt/wacl.c for the C-side protocol.
@@ -121,7 +121,7 @@ define('tcl/wacl', function () {
       return { code: 0, value: String(raw), errorCode: null };
     }
     if (raw.length !== 2) {
-      throw new Error('wacl JS bridge: returned array must be [status, value]');
+      throw new Error('surftcl JS bridge: returned array must be [status, value]');
     }
     var status = raw[0];
     var v = raw[1];
@@ -142,7 +142,7 @@ define('tcl/wacl', function () {
     if (Array.isArray(status)) {
       return { code: 1, value: valueStr, errorCode: status.map(String) };
     }
-    throw new Error('wacl JS bridge: status must be a number, string, or string array');
+    throw new Error('surftcl JS bridge: status must be a number, string, or string array');
   }
 
   function _readArgv(argc, argvPtr) {
@@ -211,15 +211,15 @@ define('tcl/wacl', function () {
         Module.testWasmInstantiationSucceeded = 1;
         successCallback(output.instance);
       }).catch(function (e) {
-        // wacl.onError doesn't exist yet (postRun hasn't fired), so inline
+        // surftcl.onError doesn't exist yet (postRun hasn't fired), so inline
         // the same shape — loud, named, honest. Nothing else can work after
         // this fails, so this is exactly the kind of failure the policy is
         // designed for.
         var msg = "wasm instantiation failed: " + e;
         _stderrSink(msg + "\n");
         if (typeof alert === "function") {
-          alert("A fatal wacl error has occurred but the developer has not " +
-                "named a point of contact through wacl.supportURL.\n\n" +
+          alert("A fatal surftcl error has occurred but the developer has not " +
+                "named a point of contact through surftcl.supportURL.\n\n" +
                 "Details: " + msg);
         }
       });
@@ -228,13 +228,13 @@ define('tcl/wacl', function () {
   };
 
   Module['postRun'] = function () {
-    _getInterp         = Module.cwrap('Wacl_GetInterp',                'number', []);
-    _eval              = Module.cwrap('Wacl_Eval',                     'number', ['number', 'string']);
-    _getStringResult   = Module.cwrap('Wacl_GetStringResult',          'string', ['number']);
-    _setJsResult       = Module.cwrap('Wacl_SetJsResultString',          null,   ['string']);
-    _appendErrorCodeEl = Module.cwrap('Wacl_AppendJsErrorCodeElement',   null,   ['string']);
-    _registerJsFn      = Module.cwrap('Wacl_RegisterJsFn',             'number', ['string', 'number']);
-    _revokeJsFn        = Module.cwrap('Wacl_RevokeJsFn',               'number', ['string']);
+    _getInterp         = Module.cwrap('SurfTcl_GetInterp',                'number', []);
+    _eval              = Module.cwrap('SurfTcl_Eval',                     'number', ['number', 'string']);
+    _getStringResult   = Module.cwrap('SurfTcl_GetStringResult',          'string', ['number']);
+    _setJsResult       = Module.cwrap('SurfTcl_SetJsResultString',          null,   ['string']);
+    _appendErrorCodeEl = Module.cwrap('SurfTcl_AppendJsErrorCodeElement',   null,   ['string']);
+    _registerJsFn      = Module.cwrap('SurfTcl_RegisterJsFn',             'number', ['string', 'number']);
+    _revokeJsFn        = Module.cwrap('SurfTcl_RevokeJsFn',               'number', ['string']);
     _Interp = _getInterp();
 
     _Result = {
@@ -304,7 +304,7 @@ define('tcl/wacl', function () {
       },
 
       // Async sibling of Eval — the top-level entry for scripts that may
-      // YIELD (`::wacl::js::yield`, or the `update` wrapper). Returns a
+      // YIELD (`::surftcl::js::yield`, or the `update` wrapper). Returns a
       // Promise: under the Asyncify build a yielding script unwinds the
       // wasm stack to the JS event loop and the Promise resolves once it
       // resumes; a non-yielding script resolves right away. Drive user
@@ -316,7 +316,7 @@ define('tcl/wacl', function () {
       EvalAsync: function (script) {
         var interp = this.interp;
         return Promise.resolve(
-          Module.ccall('Wacl_Eval', 'number', ['number', 'string'],
+          Module.ccall('SurfTcl_Eval', 'number', ['number', 'string'],
                        [interp, script], { async: true })
         ).then(function (rc) {
           if (rc !== 0) {
@@ -334,12 +334,12 @@ define('tcl/wacl', function () {
       // The default onError handler fires three channels: stderr (visible
       // in the terminal if wired, console.error otherwise), the JS console
       // (implicit via stderr's fallback), and an alert() that names a
-      // contact point. If the page set `wacl.supportURL`, the alert tells
+      // contact point. If the page set `surftcl.supportURL`, the alert tells
       // the user where to report. If not, the alert confesses that the
       // developer didn't name one — which is the truthful state of the
       // world, and the kind of pressure that gets supportURL set.
       //
-      // Pages can override `wacl.onError` to route errors anywhere they
+      // Pages can override `surftcl.onError` to route errors anywhere they
       // want (Sentry, an in-app toast, /dev/null). Overriding IS the
       // acceptance of responsibility — the floor moves with the developer's
       // explicit choice, never silently.
@@ -352,27 +352,27 @@ define('tcl/wacl', function () {
 
       onError: function (context, error) {
         var msg = "[" + context + "] " + ((error && error.message) || String(error));
-        _stderrSink("wacl error: " + msg + "\n");
+        _stderrSink("surftcl error: " + msg + "\n");
         if (typeof alert === "function") {
           if (this.supportURL) {
-            alert("A fatal wacl error has occurred.\n\n" +
+            alert("A fatal surftcl error has occurred.\n\n" +
                   "Please report it via: " + this.supportURL +
                   "\n\nDetails: " + msg);
           } else {
-            alert("A fatal wacl error has occurred but the developer " +
+            alert("A fatal surftcl error has occurred but the developer " +
                   "has not named a point of contact through " +
-                  "wacl.supportURL.\n\nDetails: " + msg);
+                  "surftcl.supportURL.\n\nDetails: " + msg);
           }
         }
       }
     };
 
-    // Bless the wacl handle as a global, defended against accidental
-    // shadowing (`var wacl = ...` at page scope would otherwise clobber
+    // Bless the surftcl handle as a global, defended against accidental
+    // shadowing (`var surftcl = ...` at page scope would otherwise clobber
     // it silently — JS has no warning for that, and a stray reassignment
     // would break every package that looks the handle up by name).
     // Properties on the object stay mutable; only the binding is locked.
-    Object.defineProperty(globalThis, "wacl", {
+    Object.defineProperty(globalThis, "surftcl", {
       value: _Result,
       writable: false,
       configurable: false,

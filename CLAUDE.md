@@ -1,11 +1,11 @@
 # CLAUDE.md
 
-Orientation notes for future Claude sessions on Wacl. Skim this before
+Orientation notes for future Claude sessions on SurfTcl. Skim this before
 making changes — a couple of these gotchas burned a session.
 
 ## What this is
 
-Wacl is a **Tcl 9** distribution compiled to WebAssembly via Emscripten.
+SurfTcl is a **Tcl 9** distribution compiled to WebAssembly via Emscripten.
 Originally written by Eckhard Lehmann (`ecky-l/wacl`) against Tcl 8.6,
 revived by dther after ~9 years of bitrot and now cut over to Tcl 9.0.3.
 The 8.6 archaeology demo is preserved at tag `v0.0.1-minimal`; master is
@@ -15,11 +15,17 @@ The current live demo is `wacl-minimal-demo/index.html`: a Tcl REPL in
 the browser, ~200 lines, one file, no framework, no build step on the
 page side.
 
-A rename is planned to mark the graduation from "Eckhard's 8.6 demo
-revived" to "modern Tcl 9 web distribution." Current proposal:
-**SurfTcl**. The rename waits until the demo grows DOM manipulation
-(via the planned tDom integration) and feels like a complete pitch —
-don't rename mid-rework.
+The project was renamed from **Wacl** to **SurfTcl** — marking the
+graduation from "Eckhard's 8.6 demo revived" to a modern Tcl 9 web
+distribution, and making the fork clear (BSD-3 clause 3, respecting the
+upstream). The rename is **contents-only so far**: identifiers,
+namespaces, and package names are now `surftcl` / `SurfTcl` / `SURFTCL`,
+but **file and directory names still use the old `wacl-*` form** (e.g.
+`opt/wacl.c`, `opt/waclNotifier.c`, `wacl-minimal.{js,wasm}`, the
+`wacl-minimal-demo/` dir, `packages/wacl-dom/`, `tests/wacl-*.test`, the
+`tcl/wacl` AMD module id, the `wacl.wasm` symlink). Those file renames,
+and the GitHub repo (`dther/wacl`), are a later pass. Upstream
+attribution to Eckhard Lehmann's original `ecky-l/wacl` stays as-is.
 
 ## Aesthetic constraints
 
@@ -45,14 +51,14 @@ The Makefile uses real file-target dependencies (`tcl`, `tcl/unix/Makefile`,
 right thing for incremental rebuilds — touching only `opt/wacl.c` and
 running `make` skips the libtcl build entirely. A cold `make fullclean
 && make` takes about two minutes end-to-end (includes the Tcl tarball
-download); subsequent edits to wacl source are about ten seconds.
+download); subsequent edits to surftcl source are about ten seconds.
 `distclean` deliberately preserves the tarball so iteration on the
 Tcl-source-tree level doesn't keep re-downloading; `fullclean` removes
 the tarball too if you want a genuinely cold cache.
 
 - `make` (default) = `make minimal`: build `wacl-minimal.{js,wasm}` and
   copy into `wacl-minimal-demo/`. This is the **Asyncify** baseline
-  (`-DWACL_ASYNCIFY -sASYNCIFY`, ~4MB) — it's what makes `::wacl::js::yield`
+  (`-DSURFTCL_ASYNCIFY -sASYNCIFY`, ~4MB) — it's what makes `::surftcl::js::yield`
   and `interp.EvalAsync` work; see `docs/event-loop.md`. JSPI will shed
   most of the size tax once it's cross-browser.
 - `make tcl`: download Tcl 9.0.3 source tarball and unpack to `tcl/`.
@@ -79,10 +85,10 @@ the tarball too if you want a genuinely cold cache.
   `Module.addFunction`, and `EXPORTED_RUNTIME_METHODS` carries
   `cwrap`, `FS`, `addFunction`, `removeFunction`, `getValue`,
   `UTF8ToString`. The Tcl-callable C entry points exported via
-  `EXPORTED_FUNCTIONS` are `_main`, `_Wacl_GetInterp`, `_Wacl_Eval`,
-  `_Wacl_GetStringResult`, the JS-bridge four (`_Wacl_RegisterJsFn`,
-  `_Wacl_RevokeJsFn`, `_Wacl_SetJsResultString`,
-  `_Wacl_AppendJsErrorCodeElement`), and `_Wacl_ServiceEvents` (the
+  `EXPORTED_FUNCTIONS` are `_main`, `_SurfTcl_GetInterp`, `_SurfTcl_Eval`,
+  `_SurfTcl_GetStringResult`, the JS-bridge four (`_SurfTcl_RegisterJsFn`,
+  `_SurfTcl_RevokeJsFn`, `_SurfTcl_SetJsResultString`,
+  `_SurfTcl_AppendJsErrorCodeElement`), and `_SurfTcl_ServiceEvents` (the
   JS-driven event pump; see `docs/event-loop.md`). If you add a C entry
   point and call it from JS, both lists need updating.
 - JS glue around the emcc output lives in `js/`:
@@ -119,10 +125,10 @@ we have neither, so the cutover does it explicitly:
 
 This same mechanism is the lever for the broader app-packaging story
 the user has gestured at: one `app.zip` of Tcl scripts and data that
-works the same on `wish`, Windows tclkit, and wacl-in-browser, with
+works the same on `wish`, Windows tclkit, and SurfTcl-in-browser, with
 extensions baked into the runtime per-platform. The JS bridge in
 `preJsRequire.js` doesn't yet expose `TclZipfs_Mount` to JS — when it
-does, page-level developers will be able to `wacl.mountZip(buf, mp)`
+does, page-level developers will be able to `surftcl.mountZip(buf, mp)`
 to load an application zip at runtime.
 
 ## The Emscripten stdout gotcha — important
@@ -176,10 +182,10 @@ clue that the original author *thought* this worked.
 If you need to inject anything Module-shaped from outside, do it
 through `preJsRequire.js` directly, not by trying to pre-set a global.
 
-## The JS bridge (`::wacl::js` + `interp.js`)
+## The JS bridge (`::surftcl::js` + `interp.js`)
 
 How the inner Tcl interp reaches back into the page. The pre-rework
-`::wacl::jscall fcnPtr returnType argType ?arg?` was a type-dispatch
+`::surftcl::jscall fcnPtr returnType argType ?arg?` was a type-dispatch
 tarpit — Cartesian-product macros over one return type and one arg
 type — and exposed raw Emscripten function-table indices to every Tcl
 caller. The rework (commit 5d60999) replaces it with a name-keyed
@@ -193,9 +199,9 @@ registry the host fills explicitly.
     interp.js.names()              // array of registered names
 
   Tcl side:
-    ::wacl::js::call NAME ?ARG ...?   // varargs; JS sees a string[]
-    ::wacl::js::names                 // Tcl list of registered names
-    ::wacl::js::revoke NAME           // voluntarily decline a grant
+    ::surftcl::js::call NAME ?ARG ...?   // varargs; JS sees a string[]
+    ::surftcl::js::names                 // Tcl list of registered names
+    ::surftcl::js::revoke NAME           // voluntarily decline a grant
 
 There is no Tcl-side `register`. The host grants what the inner
 interp may call; the inner interp can introspect, invoke, and
@@ -209,7 +215,7 @@ guest can decline what it was offered; only the host can offer.
 and arrive on the JS side as one array of strings. To pass an existing
 Tcl list as args, expand with `{*}`:
 
-    ::wacl::js::call myFn {*}$argList
+    ::surftcl::js::call myFn {*}$argList
 
 The C bridge is type-blind; all marshalling and any application-level
 type checking lives in the registered JS function. Anything richer
@@ -218,7 +224,7 @@ serialize — JSON is the default since the ecosystem already speaks it.
 
 (History note: the initial rework took a single ARG_LIST argument and
 ran `Tcl_ListObjGetElements` over it. That looks tidier, but every JS
-code block passed through `::wacl::js::call eval { ... }` had its `})`
+code block passed through `::surftcl::js::call eval { ... }` had its `})`
 patterns trip Tcl's list-syntax parser. Varargs sidestep that entirely
 since `{...}` is just one brace-group at parse time, not a list.)
 
@@ -240,7 +246,7 @@ C side hears about it):
 
 **Bootstrap-then-seal pattern.** The intended use of the registry
 is: page registers `eval` (and any other broad capabilities) at
-startup, Tcl bootstrap uses `::wacl::js::call eval { ... }` to
+startup, Tcl bootstrap uses `::surftcl::js::call eval { ... }` to
 build a domain-specific surface (DOM ops, fetch, WebSocket, file
 pickers), then the page calls `interp.js.revoke("eval")` before
 any untrusted script gets to evaluate. The capability is gone for
@@ -251,27 +257,27 @@ This is not a rare flow. It is the **default shape** for SurfTcl
 apps. Documented as such so we don't drift toward "expose
 everything by default" out of laziness.
 
-**Implementation map.** Side-channel `Wacl_SetJsResultString` /
-`Wacl_AppendJsErrorCodeElement` (called by the JS shim before its
+**Implementation map.** Side-channel `SurfTcl_SetJsResultString` /
+`SurfTcl_AppendJsErrorCodeElement` (called by the JS shim before its
 return) carry value and errorCode-list across the wasm boundary.
 The function's own integer return is the Tcl status code. C side
 in `opt/wacl.c`; JS side in `js/preJsRequire.js`.
 
-## Failure surface: `wacl.supportURL` and `wacl.onError`
+## Failure surface: `surftcl.supportURL` and `surftcl.onError`
 
 The floor is honesty, not an implicit white lie.
 
-`wacl.onError(context, error)` is the bridge's default error sink,
-invoked by the packages (and by anything else inside wacl that fails
+`surftcl.onError(context, error)` is the bridge's default error sink,
+invoked by the packages (and by anything else inside surftcl that fails
 in a way the page should know about). The default implementation
 writes to stderr (visible in the terminal if wired, console.error
 otherwise) and fires an `alert()`. The alert text branches on whether
-`wacl.supportURL` is set:
+`surftcl.supportURL` is set:
 
-  - Set: "A fatal wacl error has occurred. Please report it via:
+  - Set: "A fatal surftcl error has occurred. Please report it via:
     {supportURL} — Details: {context+message}"
-  - Not set: "A fatal wacl error has occurred but the developer has
-    not named a point of contact through wacl.supportURL. Details:
+  - Not set: "A fatal surftcl error has occurred but the developer has
+    not named a point of contact through surftcl.supportURL. Details:
     {context+message}"
 
 The unset branch is deliberate self-incrimination. Generic "please
@@ -279,10 +285,10 @@ report this to the developer" is a white lie — it implies a path
 forward when there might not be one. By naming the omission, the
 default forces the developer into one of two right things:
 
-  1. Set `wacl.supportURL` to any contact pointer (URL, mailto:,
+  1. Set `surftcl.supportURL` to any contact pointer (URL, mailto:,
      GitHub issues link, "tweet at @us") — strings, not validated.
      The alert then names where to go.
-  2. Override `wacl.onError = function (context, error) { ... }` —
+  2. Override `surftcl.onError = function (context, error) { ... }` —
      route errors anywhere (Sentry, an in-app toast, /dev/null).
      Overriding IS the formal, in-code acceptance of responsibility.
 
@@ -292,27 +298,27 @@ until they do one of the two above. Both are easy. The default is
 calibrated so that the *only* way to be invisible is to actively
 take responsibility for being so.
 
-"Fatal" is the right descriptor even for recoverable one-shots: wacl
+"Fatal" is the right descriptor even for recoverable one-shots: surftcl
 doesn't know whether a failed handler put the application in a bad
 state, can't make that claim, so falls back on the developer — who,
 by not setting supportURL, has abdicated naming the recovery path.
 As far as the end user is concerned, that's fatal.
 
-The `wacl::dom` listener catch, the `wacl::chan` postevent/onData
+The `surftcl::dom` listener catch, the `surftcl::chan` postevent/onData
 catches, and the wasm-instantiation failure all route through
-`wacl.onError` (or, for wasm instantiation, an inline version of
+`surftcl.onError` (or, for wasm instantiation, an inline version of
 the same shape — postRun hasn't fired yet at that point).
 
 ## Re-entrant Tcl_Eval — fence REMOVED
 
-There used to be a fence here: `Wacl_Eval` refused any call made while
-another `Wacl_Eval` was on the stack. It's **gone** (commit "Remove
+There used to be a fence here: `SurfTcl_Eval` refused any call made while
+another `SurfTcl_Eval` was on the stack. It's **gone** (commit "Remove
 requirement for re-entrant execution"), because it was solving the wrong
 problem. Re-entrant evaluation is normal and safe in Tcl — the engine
 re-enters itself for every `[bracket]` substitution, `eval`, and
 `fileevent` callback. JS and Tcl now share one thread and one event
-loop, so a JS callback invoked mid-Tcl (via `::wacl::js::call`) calling
-straight back into `Wacl_Eval` is exactly the cooperation we want.
+loop, so a JS callback invoked mid-Tcl (via `::surftcl::js::call`) calling
+straight back into `SurfTcl_Eval` is exactly the cooperation we want.
 
 We deliberately do **not** save/restore interpreter state around the
 nested call: a JS-side failure that propagates leaves its
@@ -334,13 +340,13 @@ See `docs/event-loop.md` for the full analysis.
 Three Tcl packages that demonstrate the bootstrap-then-seal pattern in
 miniature. Each one self-installs its JS shims at `package require` time
 using the host-granted `eval`, then exposes a Tcl-side surface. The
-intended flow is `require X; require Y; …; ::wacl::js::revoke eval` —
+intended flow is `require X; require Y; …; ::surftcl::js::revoke eval` —
 after the revoke, no more bridged packages can be added, but the ones
 already loaded keep working.
 
-  - **wacl::json** — `wacl::json get $blob ?key…?`,
-    `wacl::json extract $blob ?key…?`, and
-    `wacl::json exists $blob ?key…?`. Path traversal in JS via
+  - **surftcl::json** — `surftcl::json get $blob ?key…?`,
+    `surftcl::json extract $blob ?key…?`, and
+    `surftcl::json exists $blob ?key…?`. Path traversal in JS via
     `JSON.parse`. `get` returns coerced Tcl values (objects and arrays
     re-stringified as JSON so you can recurse); `extract` returns the
     raw JSON fragment (strings stay quoted, `true` stays a bare
@@ -354,25 +360,25 @@ already loaded keep working.
     isn't. Same precedent will apply when typed-write commands
     (`json string`, `json bool`, …) get added.
 
-  - **wacl::dom** — events plus DOM manipulation, consistently "trust
+  - **surftcl::dom** — events plus DOM manipulation, consistently "trust
     JS to be JS." Selectors are standard CSS resolved through
     `document.querySelector`; the special selector `:this` refers to
-    the currently-iterated element inside `wacl::dom each`.
+    the currently-iterated element inside `surftcl::dom each`.
     Surface:
-        wacl::dom bind SEL EVENT SCRIPT       -> handle
-        wacl::dom unbind HANDLE
-        wacl::dom event FIELD                 -> string
-        wacl::dom prop  SEL PATH ?VALUE?      -> string | void
-        wacl::dom style SEL CSSPROP ?VALUE?   -> string | void
-        wacl::dom call  SEL METHOD ?ARG ...?  -> string
-        wacl::dom html  SEL ?HTML?            -> string | void
-        wacl::dom text  SEL ?TEXT?            -> string | void
-        wacl::dom before SEL HTML             -> void
-        wacl::dom prepend SEL HTML            -> void
-        wacl::dom append SEL HTML             -> void
-        wacl::dom after  SEL HTML             -> void
-        wacl::dom remove SEL
-        wacl::dom each   SEL BODY             -> count
+        surftcl::dom bind SEL EVENT SCRIPT       -> handle
+        surftcl::dom unbind HANDLE
+        surftcl::dom event FIELD                 -> string
+        surftcl::dom prop  SEL PATH ?VALUE?      -> string | void
+        surftcl::dom style SEL CSSPROP ?VALUE?   -> string | void
+        surftcl::dom call  SEL METHOD ?ARG ...?  -> string
+        surftcl::dom html  SEL ?HTML?            -> string | void
+        surftcl::dom text  SEL ?TEXT?            -> string | void
+        surftcl::dom before SEL HTML             -> void
+        surftcl::dom prepend SEL HTML            -> void
+        surftcl::dom append SEL HTML             -> void
+        surftcl::dom after  SEL HTML             -> void
+        surftcl::dom remove SEL
+        surftcl::dom each   SEL BODY             -> count
     `prop`, `call`, `event` all accept JS-style dot-paths
     (`target.id`, `classList.add`, `dataset.userId`, …). `style`
     accepts CSS-hyphenated or camelCase via getProperty/setProperty.
@@ -387,9 +393,9 @@ already loaded keep working.
     they fire from the JS event loop between Tcl_Eval calls, not
     synchronously inside one.
 
-  - **wacl::chan** — `set ch [wacl::chan open NAME]` returns a Tcl
+  - **surftcl::chan** — `set ch [surftcl::chan open NAME]` returns a Tcl
     reflected channel (`chan create`), bidirectional and binary.
-    JS side attaches with `globalThis.waclChan.attach(NAME)` to
+    JS side attaches with `globalThis.surftclChan.attach(NAME)` to
     get `{onData, write, close}`. Bytes round-trip via latin-1 to
     preserve identity (a Uint8Array byte N becomes JS code-point N
     becomes Tcl code-point N becomes the literal byte N out of a
@@ -402,7 +408,7 @@ already loaded keep working.
     stdio — stdin/stdout/stderr are Tcl's own standard channels (Tcl
     names and initialises them, over `FS.init` fd devices; see the
     Emscripten stdout gotcha). Don't route the standard streams through
-    `wacl::chan`. (Reflected channels are pure Tcl + the JS bridge —
+    `surftcl::chan`. (Reflected channels are pure Tcl + the JS bridge —
     **no Emscripten pipes**; the only Emscripten dependency in the whole
     event story is Asyncify, for the yield.) JS writes currently defer
     `chan postevent` via `setTimeout(0)`; that dodge existed only for the
@@ -410,14 +416,14 @@ already loaded keep working.
     re-entry during a suspension is proven safe (a next-step in
     `docs/event-loop.md`).
 
-**Bootstrap dependency.** Package shims look up the wacl handle as
-`globalThis.wacl`, blessed in `preJsRequire.js`'s postRun via
-`Object.defineProperty(globalThis, "wacl", { value: _Result,
+**Bootstrap dependency.** Package shims look up the surftcl handle as
+`globalThis.surftcl`, blessed in `preJsRequire.js`'s postRun via
+`Object.defineProperty(globalThis, "surftcl", { value: _Result,
 writable: false, configurable: false })`. The binding is locked
-against accidental shadowing (a stray `var wacl = ...` at page scope
+against accidental shadowing (a stray `var surftcl = ...` at page scope
 would otherwise clobber it silently — JS gives no warning); the
-properties on the object stay mutable so `wacl.stdout = fn` etc.
-still work. `__interp` and `__wacl` remain on `window` as console
+properties on the object stay mutable so `surftcl.stdout = fn` etc.
+still work. `__interp` and `__surftcl` remain on `window` as console
 aliases for shorter typing, but they're no longer load-bearing.
 
 **Layout.** `/packages/wacl-<name>/{pkgIndex.tcl, wacl-<name>.tcl}` —
@@ -439,7 +445,7 @@ mounts it anywhere and `lappend auto_path <mountpoint>` finds it in the
 
     tcl::zipfs::mount /path/to/wacl-dom.zip //zipfs:/pkg/wacl-dom
     lappend auto_path //zipfs:/pkg/wacl-dom
-    package require wacl::dom
+    package require surftcl::dom
 
 `make packages` (or `make -C ext`) builds them; `make test` builds then
 runs the headless suite. The headless runner **loads packages from
@@ -525,14 +531,14 @@ developer credential or a paste through the GH web UI. End-to-end test
 runtime ~7 seconds.
 
 Four suites exist now: `wacl-json.test`, `wacl-chan.test`,
-`wacl-dom.test`, and `wacl-bridge.test` (the `::wacl::js::*` surface
+`wacl-dom.test`, and `wacl-bridge.test` (the `::surftcl::js::*` surface
 itself — re-entrancy + error propagation, the regression guard for the
 removed eval-fence).
 
 Two constraint conventions came out of writing the chan/dom suites, and
 new suites should reuse them rather than reinvent:
 
-  - **`dom` constraint.** wacl::dom needs a real `document`, which the
+  - **`dom` constraint.** surftcl::dom needs a real `document`, which the
     headless node runner doesn't have. `wacl-dom.test` sets
     `testConstraint dom` from `typeof document !== "undefined"` and tags
     every test `-constraints dom`. Result: the *same file* runs for real
@@ -543,7 +549,7 @@ new suites should reuse them rather than reinvent:
   - **`eventLoop` constraint — RETIRED.** It used to gate tests that
     needed an event to actually *fire*, deliberately red as honest
     markers of the unsolved event semantics. The event-loop work this
-    described has since landed (custom notifier + `Wacl_ServiceEvents`
+    described has since landed (custom notifier + `SurfTcl_ServiceEvents`
     pump + eval-fence removal — see `docs/event-loop.md`), so the
     markers are gone: `chan-fileevent-1.1` now tests real dispatch (JS
     feeds bytes → `chan postevent` → `update` pumps → the `fileevent`
@@ -619,7 +625,7 @@ Three pages, each self-contained, no framework, AMD shim only.
 - One file, inline CSS + JS, no framework.
 - 5-line AMD shim (`define`, `require`, `require.toUrl`) avoids pulling
   in RequireJS.
-- `WaclTerminal({ mount, prompt, onLine })` is the channel abstraction.
+- `SurfTclTerminal({ mount, prompt, onLine })` is the channel abstraction.
   Methods: `write`, `writeErr`, `clear`, `setPrompt`, `focus`.
   Transport-agnostic by design — the same shape works for a remote
   tclsh over WebSocket with no API change.
@@ -631,13 +637,13 @@ Three pages, each self-contained, no framework, AMD shim only.
   bold, reset. Other escape sequences are consumed silently rather than
   rendered as garbage.
 - The demo also registers `alert` and `eval` as example JS bridge
-  entries on the inner interp, so `::wacl::js::call eval {Math.PI}`
+  entries on the inner interp, so `::surftcl::js::call eval {Math.PI}`
   works out of the box. These are *examples* — in a real app the page
   would register exactly what it wants the inner interp to reach, then
   `revoke("eval")` before any untrusted code lands.
-- `window.__interp` and `window.__wacl` are exposed for JS-console
+- `window.__interp` and `window.__surftcl` are exposed for JS-console
   debugging: try `__interp.js.register("ping", a => "pong:" + a.join(","))`
-  then `__interp.Eval("::wacl::js::call ping {one two three}")`.
+  then `__interp.Eval("::surftcl::js::call ping {one two three}")`.
 
 ## Things explicitly punted
 
@@ -653,18 +659,18 @@ Three pages, each self-contained, no framework, AMD shim only.
   the index.
 - **`tdom` against Tcl 9.** Next big feature. After looking at how
   ecky-l's wacl used tdom, the patch turns out to be lighter than
-  feared: Wacl's old DOM bridge is string-in/string-out — tdom never
+  feared: SurfTcl's old DOM bridge is string-in/string-out — tdom never
   sees the actual DOM, it just parses HTML strings the page hands it
   via the JS bridge. So the patch is mostly linting and command
-  renaming for Tcl 9 compatibility; the `::wacl::RootDOM` namespace
+  renaming for Tcl 9 compatibility; the `::surftcl::RootDOM` namespace
   variable / `WithRoot` helper this doc previously gestured at is
-  largely moot — the *caller* (in wacl) is what holds the document
-  reference, not tdom. The legacy `::wacl::dom` command in `opt/wacl.c`
+  largely moot — the *caller* (in surftcl) is what holds the document
+  reference, not tdom. The legacy `::surftcl::dom` command in `opt/wacl.c`
   still exists as a stop-gap; once tdom lands, equivalents go via
-  registered JS functions (`querySelectorAll`, etc.) and `::wacl::dom`
+  registered JS functions (`querySelectorAll`, etc.) and `::surftcl::dom`
   retires.
 - **Replace the sed-patches with named patch files.** The two
-  `waclconfig` sed lines (`ZLIB_INCLUDE`, `-DTCL_THREADS=0`) should
+  `surftclconfig` sed lines (`ZLIB_INCLUDE`, `-DTCL_THREADS=0`) should
   become files in a `patches/` directory (quilt-style) or a Tcl script
   that does the rewrites. Deferred until the build pipeline is
   otherwise stable.
@@ -672,11 +678,11 @@ Three pages, each self-contained, no framework, AMD shim only.
   `_Result.pushStdin` provides a one-shot queue, but `gets stdin` doesn't
   yet block-and-yield. This lives in the **standard-channel layer** —
   stdin is Tcl's own channel over the `FS.init` fd device, **not** a
-  `wacl::chan`. The Asyncify yield makes the real fix possible: a `gets
-  stdin` on an empty device can `::wacl::js::yield`, JS feeds via
+  `surftcl::chan`. The Asyncify yield makes the real fix possible: a `gets
+  stdin` on an empty device can `::surftcl::js::yield`, JS feeds via
   `pushStdin` during the suspension, and the read resumes — keeping the
   page live while it waits, with no Emscripten pipe. Implement it in that
-  device/standard-channel layer; do not reach for `wacl::chan`.
+  device/standard-channel layer; do not reach for `surftcl::chan`.
 - **Runaway-loop weak preemption (cooperative-model backstop).** A Tcl
   loop that never yields — `while 1 {puts lol}` — freezes the whole
   browser tab: the single thread is held, so the JS event loop can't
@@ -715,13 +721,13 @@ Three pages, each self-contained, no framework, AMD shim only.
   (key-up signals), and it costs basically nothing on modern hardware.
   Not implemented. Do not implement without an explicit ask.
 - **A WebSocket transport** so the same terminal can front a remote
-  tclsh. `WaclTerminal`'s shape was designed for it.
+  tclsh. `SurfTclTerminal`'s shape was designed for it.
 - **C extensions via wasm side modules.** Possible in principle —
   Emscripten supports `MAIN_MODULE`/`SIDE_MODULE`, and Tcl's stubs
   table is exactly the right shape — but the build-time ABI matching
   between main and side modules means it's not "drop any .so into the
   zip and go." Note for the LOVE-clone packaging story: "C extensions
-  need to be compiled for wacl specifically, same way desktop
+  need to be compiled for surftcl specifically, same way desktop
   extensions are compiled against a specific Tcl version."
   Inter-extension ABI: use `Tcl_PkgProvideEx` / `Tcl_PkgRequireEx`
   with a version word at offset 0 of a vtable struct — this is the
@@ -733,8 +739,8 @@ Three pages, each self-contained, no framework, AMD shim only.
   See `docs/event-loop.md` for the full design and current state. The JS
   and Tcl event loops are integrated on the **main thread** via a custom
   non-blocking notifier (`Tcl_SetNotifier`, no Tcl-source patch) that JS
-  pumps with `Wacl_ServiceEvents` (`Tcl_DoOneEvent(TCL_DONT_WAIT)`); the
-  yield primitive (`::wacl::js::yield` → `Wacl_Yield` → `emscripten_sleep`
+  pumps with `SurfTcl_ServiceEvents` (`Tcl_DoOneEvent(TCL_DONT_WAIT)`); the
+  yield primitive (`::surftcl::js::yield` → `SurfTcl_Yield` → `emscripten_sleep`
   under Asyncify, one-suspension guard) lets a Tcl computation relinquish
   to the JS loop and resume in place, with `interp.EvalAsync` the
   Promise-returning top-level entry and the pure-Tcl `update` wrapper the
@@ -754,12 +760,17 @@ Three pages, each self-contained, no framework, AMD shim only.
   runtime wakeup dependency. The custom-notifier route above sidesteps
   the whole platform notifier anyway. A self-pipe-fallback TIP is still
   worth filing upstream for "threads but no signals" targets.
-- **Rename to SurfTcl.** Holding until the demo has DOM manipulation
-  and feels like a complete pitch. When the rename happens it touches
-  the C symbol prefix (`Wacl_*` → `Surftcl_*` or similar), the package
-  name (`package provide wacl 1.0.0`), the Tcl namespace (`::wacl::*`),
-  build outputs, demo paths, and the repo itself. Do not rename
-  piecemeal.
+- **Finish the SurfTcl rename (file/dir names + repo).** The
+  *identifier* rename is done (see "What this is"): C symbols
+  (`SurfTcl_*`), namespace (`::surftcl::*`), package names
+  (`surftcl::dom` etc.), JS handle (`globalThis.surftcl`), build define
+  (`SURFTCL_ASYNCIFY`). Still on the old `wacl-*` form: file and
+  directory names (`opt/wacl.c`, `wacl-minimal-demo/`, `packages/wacl-dom/`,
+  `tests/wacl-*.test`, output `wacl-minimal.{js,wasm}` + the `wacl.wasm`
+  symlink), the `tcl/wacl` AMD module id, and the GitHub repo
+  `dther/wacl`. Rename those together (each cascades into path
+  references — Makefile, runners, demo fetches, ext zip globs) and
+  rebuild; do not do it piecemeal. Keep the `ecky-l/wacl` attribution.
 
 ## Conventions
 

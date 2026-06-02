@@ -17,7 +17,7 @@ const here    = path.dirname(fileURLToPath(import.meta.url));
 const root    = path.resolve(here, '..');
 const demoDir = path.join(root, 'wacl-minimal-demo');
 
-// AMD shim and a fetch surrogate. The wacl bundle does
+// AMD shim and a fetch surrogate. The surftcl bundle does
 // XMLHttpRequest('GET', 'wacl.wasm') with a relative URL, which we
 // resolve against demoDir.
 const __modules = {};
@@ -65,7 +65,7 @@ sandbox.require(['tcl/wacl'], (m) => {
     // Grant `eval` — every wacl-* package needs it for its JS shim
     // install. (CI mirrors the production bootstrap shape.)
     vm.runInContext(`
-      wacl.js.register("eval", function (args) {
+      surftcl.js.register("eval", function (args) {
         var r = (0, eval)(args[0]);
         return r === undefined ? "" :
                (typeof r === "object" ? JSON.stringify(r) : String(r));

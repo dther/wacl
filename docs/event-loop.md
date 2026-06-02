@@ -94,16 +94,16 @@ is for *application* channels — and they are **reflected channels, with
 no Emscripten pipes**:
 
 - An application event channel is an in-memory byte buffer exposed as a
-  Tcl reflected channel (`chan create` — the `wacl::chan` machinery is
+  Tcl reflected channel (`chan create` — the `surftcl::chan` machinery is
   already this shape). JS appends bytes and marks it readable
   (`Tcl_NotifyChannel` / a queued event); the next pump fires the
   channel's `fileevent readable`. No Emscripten fd plumbing — the buffer
   is JS-side, fed across the bridge. With the re-entrancy fence gone and
   M1-style re-entry-during-a-suspension proven safe, JS can feed and post
   *synchronously* while the interpreter is yielded (the `setTimeout(0)`
-  defer in `wacl::chan` was only there for the old fence).
+  defer in `surftcl::chan` was only there for the old fence).
 - Generalize to **runtime-created channels**: `surftcl::fifo NAME` (or
-  similar) mints a fresh `wacl::chan`-style channel JS can attach to. DOM
+  similar) mints a fresh `surftcl::chan`-style channel JS can attach to. DOM
   events, fetch responses, WebSocket frames, gamepad polls — all dispatch
   into Tcl as bytes on a channel, and Tcl can `fileevent`, buffer,
   reflect, and reconfigure them *because they're just strings*. A
@@ -112,7 +112,7 @@ no Emscripten pipes**:
 **stdio is NOT one of these.** stdin/stdout/stderr are Tcl's own standard
 channels — Tcl names and initialises them, over Emscripten `FS.init` fd
 devices (the stdout-gotcha wiring). They stay in that standard-channel
-layer; `wacl::chan` is for app special-use channels, never the standard
+layer; `surftcl::chan` is for app special-use channels, never the standard
 streams. The "real-time stdin" payoff (a blocking `gets stdin` that
 yields while it waits, instead of the one-shot `pushStdin`) belongs to
 that device layer — same Asyncify yield, different home.
@@ -136,7 +136,7 @@ problem: re-entrant evaluation is normal and safe in Tcl, and the genuine
 risk — corrupting a *suspended* evaluation's state — only arises at a
 *yield* (see the yield design conclusion), not at a nested call that runs
 to completion. JS-driven pumping never tripped it anyway (the pump
-dispatches via Tcl's own `Tcl_EvalObjEx`, not `Wacl_Eval`).
+dispatches via Tcl's own `Tcl_EvalObjEx`, not `SurfTcl_Eval`).
 
 ## Deferred (worker mode + shared state)
 
@@ -156,9 +156,9 @@ dispatches via Tcl's own `Tcl_EvalObjEx`, not `Wacl_Eval`).
 
 **Step 1 done (spike, `opt/waclNotifier.c`).** Custom non-blocking
 notifier installed via `Tcl_SetNotifier` at the top of `main`, plus an
-exported `Wacl_ServiceEvents` that drains ready events with
+exported `SurfTcl_ServiceEvents` that drains ready events with
 `Tcl_DoOneEvent(TCL_ALL_EVENTS | TCL_DONT_WAIT)`. Verified in the wasm
-runtime: `after 0` + a `Wacl_ServiceEvents()` call fires the timer (pump
+runtime: `after 0` + a `SurfTcl_ServiceEvents()` call fires the timer (pump
 dispatches); a channel fed from JS fires its `fileevent` callback with no
 `vwait`; and `vwait` on a JS-gated event now raises `NO_SOURCES`
 *immediately* instead of hanging. No regression in the suite (45 pass).
@@ -173,17 +173,17 @@ fast. For a finite timeout (a poll), 0 is correct.
 
 **Test acceptance, in.** `chan-fileevent-1.1` is rewritten to the real
 model — JS feeds bytes, `chan postevent` signals readable, `update` (the
-Tcl-side sibling of `Wacl_ServiceEvents`) pumps, the `fileevent` fires
+Tcl-side sibling of `SurfTcl_ServiceEvents`) pumps, the `fileevent` fires
 and drains — and passes in both runners, no `vwait`.
 
 **Eval-fence removed** (commit "Remove requirement for re-entrant
 execution") and locked in by `tests/wacl-bridge.test`: a JS callback may
-re-enter `Wacl_Eval` synchronously, a thrown JS exception is a catchable
+re-enter `SurfTcl_Eval` synchronously, a thrown JS exception is a catchable
 Tcl error, and a nested-`Eval` failure propagates with its `errorInfo`
 trace intact (no save/restore — silent isolation is the thing we reject).
 With the fence gone, `dom-bind-3.1` now passes for **synchronous**
-dispatch: `wacl::dom call … click` fires the listener inline and the
-bound script's re-entrant `wacl.Eval` runs. The `eventLoop` constraint is
+dispatch: `surftcl::dom call … click` fires the listener inline and the
+bound script's re-entrant `surftcl.Eval` runs. The `eventLoop` constraint is
 retired (nothing uses it). What a test still can't reach is a *real*
 event-loop-deferred click — that waits on the yield construct below.
 Headless green (52 pass / 0 fail / 26 skip — dom skips, no DOM); jsdom
@@ -217,7 +217,7 @@ against `tclExecute.c`:
     unwind state, so both layers assume one suspension in flight, LIFO.
   - **So the guard is a single flag, not a wall:** refuse to yield while
     another evaluation is already suspended ("defer with `after`"). Plus
-    two correctness touches: JS-entry `Wacl_Eval` should force
+    two correctness touches: JS-entry `SurfTcl_Eval` should force
     `TCL_EVAL_GLOBAL` (so a re-entrant eval during a yield doesn't inherit
     the parked proc's locals), and the yield command must set its own
     result on resume.
@@ -232,16 +232,16 @@ work as rewiring the Eval-driven demos. Going async is the through-line.
 The `update`→yield wiring does **not** need a C-level `Tcl_DoWhenIdle`
 idletask. It's six lines of Tcl:
 
-    rename update ::wacl::OLD::update
+    rename update ::surftcl::OLD::update
     proc update {args} {
-        ::wacl::OLD::update {*}$args
-        ::wacl::js::yield
+        ::surftcl::OLD::update {*}$args
+        ::surftcl::js::yield
     }
 
 "`update` = let the substrate breathe" — process Tcl's own queue, then
 yield to JS. The mapping is honest (`update idletasks` already means
 "let deferred display work happen"; on the web that's the JS loop). What
-this layer can't conjure is `::wacl::js::yield` itself — there is no
+this layer can't conjure is `::surftcl::js::yield` itself — there is no
 pure-Tcl way to relinquish the wasm thread to JS and resume in place
 (`vwait` blocks; a coroutine `yield` returns to its Tcl resumer; `after`
 just schedules). That primitive is irreducibly C + Asyncify. So the
@@ -279,11 +279,11 @@ so no one is excluded. Migrating the mechanism later is localized to the
 
 ## Yield spike — PASSED
 
-Built (`make asyncify`, `-DWACL_ASYNCIFY -sASYNCIFY
+Built (`make asyncify`, `-DSURFTCL_ASYNCIFY -sASYNCIFY
 -sASYNCIFY_STACK_SIZE=1048576`) and run in node against the three
-milestones. `Wacl_Yield` (opt/waclNotifier.c) is `emscripten_sleep(0)`
-behind the one-suspension guard; `::wacl::js::yield` fronts it (wacl.c);
-JS-entry `Wacl_Eval` now forces `TCL_EVAL_GLOBAL`. Harness: dther's
+milestones. `SurfTcl_Yield` (opt/waclNotifier.c) is `emscripten_sleep(0)`
+behind the one-suspension guard; `::surftcl::js::yield` fronts it (wacl.c);
+JS-entry `SurfTcl_Eval` now forces `TCL_EVAL_GLOBAL`. Harness: dther's
 pure-Tcl `update` wrapper + a `longcalc` proc that yields mid-computation
 (`set x 1; update; incr x 41`).
 
@@ -292,34 +292,34 @@ pure-Tcl `update` wrapper + a `longcalc` proc that yields mid-computation
     works; the `update` wrapper is a real integration layer.
   - **M1 — re-entry during suspension: PASS, and this is the one that
     mattered.** While `longcalc` is parked at its yield, JS synchronously
-    re-enters (`Wacl_Eval` "set ::reentered 1") — the re-entry runs *and*
+    re-enters (`SurfTcl_Eval` "set ::reentered 1") — the re-entry runs *and*
     the parked computation resumes intact (42, `::reentered` == 1).
     Asyncify did **not** assert on the re-entry, and the segmented exec
     stack kept the parked operands valid. The interp-corruption fear was
     unfounded for a single suspension, exactly as the source reading
     predicted.
   - **M2 — nested-yield guard: PASS.** A yield attempted *during* the
-    suspension is refused with `WACL YIELD NESTED` ("already suspended")
+    suspension is refused with `SURFTCL YIELD NESTED` ("already suspended")
     before any second `emscripten_sleep`, and the first suspension still
     resumes. No `tclExecute.c:1034` panic, no buffer clobber.
 
-All milestones drove `Wacl_Eval` via `ccall(..., {async:true})`,
+All milestones drove `SurfTcl_Eval` via `ccall(..., {async:true})`,
 confirming the async boundary. Cost measured: **4.15 MB vs 2.82 MB**
 (~1.47x) — the Asyncify tax, as expected. The C + Makefile target are
-committed (guarded behind `WACL_ASYNCIFY`, so the default build is
+committed (guarded behind `SURFTCL_ASYNCIFY`, so the default build is
 unchanged and stays lean); the asyncify wasm is **not** committed
 (gitignored scratch).
 
 ## The async boundary — DONE
 
 Asyncify is now the **committed baseline**: `make minimal` builds the
-yield-capable ~4MB wasm (`-DWACL_ASYNCIFY -sASYNCIFY`), the separate
+yield-capable ~4MB wasm (`-DSURFTCL_ASYNCIFY -sASYNCIFY`), the separate
 `asyncify` target is gone. The JS bridge keeps **two** entry points,
 which turned out to be the right shape rather than one async `Eval`:
 
   - **`interp.Eval(script)` — synchronous, unchanged.** For
     re-entrant/internal calls that need the result *now* and won't yield:
-    the JS bridge re-enters this way (`::wacl::js::call eval {wacl.Eval
+    the JS bridge re-enters this way (`::surftcl::js::call eval {surftcl.Eval
     "..."}` must hand a string back to the C bridge synchronously), and a
     sync ccall can't survive an unwind. The bridge tests and package
     shims ride this path untouched.
@@ -340,16 +340,16 @@ a suspension, and async error propagation all pass.
 
 1. **Blocking `gets stdin` via yield** — in the standard-channel /
    `FS.init` device layer (stdin is Tcl's own channel, *not* a
-   `wacl::chan`): an empty read yields, JS feeds via `pushStdin` during
+   `surftcl::chan`): an empty read yields, JS feeds via `pushStdin` during
    the suspension, the read resumes. Keeps the page live while waiting.
-   (Application event channels are already covered by `wacl::chan` — see
+   (Application event channels are already covered by `surftcl::chan` — see
    "Channels as the universal carrier"; nothing more needed there.)
-2. **Async DOM listeners.** `wacl::dom`'s bound handler still calls the
-   *synchronous* `wacl.Eval` (so a handler that itself `update`s would
+2. **Async DOM listeners.** `surftcl::dom`'s bound handler still calls the
+   *synchronous* `surftcl.Eval` (so a handler that itself `update`s would
    break, and `:this` isn't preserved across a yield). Move it to
    `EvalAsync` with proper currentElement save/restore across the await
    when we want handlers to be able to yield.
-3. **Re-home `wacl::chan`'s JS-side deferral** onto `Wacl_ServiceEvents`
+3. **Re-home `surftcl::chan`'s JS-side deferral** onto `SurfTcl_ServiceEvents`
    instead of bare `setTimeout`, once the pump is the canonical loop.
 4. **JSPI** when Safari ships it (Interop 2026): a dual build that sheds
    the Asyncify size/speed tax where the engine supports it. The C and
@@ -383,5 +383,24 @@ Two complementary fixes, both likely wanted:
 - **Unhandled-exception callback.** Unhandled Tcl errors currently go to
   stderr — REPL-correct, app-wrong (the web's default is "log to console,"
   not "bug report, please"). Add an explicit JS-side sink for unhandled
-  Tcl exceptions, alongside the existing `wacl.onError`/`supportURL`
+  Tcl exceptions, alongside the existing `surftcl.onError`/`supportURL`
   surface. Wiring only; after the pipes work.
+
+- **Conditional call-stack stash across a yield (dther's idea; no major
+  objection).** We rejected blanket save/restore of interp state around a
+  nested call because it wipes a propagated error's trace. The halfway
+  refinement: stash errorInfo/errorCode *before* a yield, and **restore it
+  only if the yield resumes cleanly.** Reasoning — if a JS-side exception
+  happens *during* the suspension you want the full stack (don't restore);
+  but if you simply came back, all that happened was "background tasks ran
+  successfully," and the foreground command's stack shouldn't be polluted
+  with the JS event-callback churn that ran between your call and some
+  unrelated exception long after. This is sound, and it unifies with
+  Tcl's existing **bgerror**: background event-callbacks that run during a
+  yield are conceptually the same as `after`/`fileevent` callbacks, whose
+  errors already route to the background-error handler rather than the
+  foreground script. So the design is: route errors from re-entrant
+  background evals during a yield to `bgerror`; restore the foreground
+  errorInfo on clean resume. The mechanism for "an exception during the
+  yield surfaces to the yielding command" (vs. silently going to bgerror)
+  is the part to design. Tie-in with `interp bgerror` / `::tcl::Bgerror`.

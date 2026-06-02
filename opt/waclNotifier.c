@@ -11,7 +11,7 @@
  * for an event — there is no thread to wake it, and a blocking wait would
  * freeze the page. This notifier therefore refuses to block: its
  * waitForEvent returns immediately. The JS side drives event servicing
- * explicitly by calling Wacl_ServiceEvents (which pumps Tcl_DoOneEvent in
+ * explicitly by calling SurfTcl_ServiceEvents (which pumps Tcl_DoOneEvent in
  * non-blocking mode) whenever it gets a turn — a channel got bytes, a
  * timer is due, a DOM event fired.
  *
@@ -33,14 +33,14 @@
  * block.
  */
 
-static void *WaclInitNotifier(void)            { return NULL; }
-static void  WaclFinalizeNotifier(void *cd)    { (void) cd; }
-static void  WaclAlertNotifier(void *cd)       { (void) cd; }
-static void  WaclServiceModeHook(int mode)     { (void) mode; }
+static void *SurfTclInitNotifier(void)            { return NULL; }
+static void  SurfTclFinalizeNotifier(void *cd)    { (void) cd; }
+static void  SurfTclAlertNotifier(void *cd)       { (void) cd; }
+static void  SurfTclServiceModeHook(int mode)     { (void) mode; }
 
 /* Tcl keeps its own timer queue; the notifier timer hint is irrelevant
  * because we never sleep on it. */
-static void  WaclSetTimer(const Tcl_Time *t)   { (void) t; }
+static void  SurfTclSetTimer(const Tcl_Time *t)   { (void) t; }
 
 /*
  * Never block — but the *way* we decline matters. When Tcl wants to block
@@ -57,7 +57,7 @@ static void  WaclSetTimer(const Tcl_Time *t)   { (void) t; }
  * ready, fall through.
  */
 static int
-WaclWaitForEvent(const Tcl_Time *timePtr)
+SurfTclWaitForEvent(const Tcl_Time *timePtr)
 {
     if (timePtr == NULL) {
         return -1;
@@ -67,24 +67,24 @@ WaclWaitForEvent(const Tcl_Time *timePtr)
 
 /* Reflected channels don't register real fds with the notifier, so these
  * never fire for our channels; stubbed for completeness. */
-static void  WaclCreateFileHandler(int fd, int mask, Tcl_FileProc *proc,
+static void  SurfTclCreateFileHandler(int fd, int mask, Tcl_FileProc *proc,
                                    void *cd)
 { (void) fd; (void) mask; (void) proc; (void) cd; }
-static void  WaclDeleteFileHandler(int fd) { (void) fd; }
+static void  SurfTclDeleteFileHandler(int fd) { (void) fd; }
 
 void
-Wacl_InstallNotifier(void)
+SurfTcl_InstallNotifier(void)
 {
     Tcl_NotifierProcs np;
     memset(&np, 0, sizeof(np));
-    np.initNotifierProc      = WaclInitNotifier;
-    np.finalizeNotifierProc  = WaclFinalizeNotifier;
-    np.alertNotifierProc     = WaclAlertNotifier;
-    np.serviceModeHookProc   = WaclServiceModeHook;
-    np.setTimerProc          = WaclSetTimer;
-    np.waitForEventProc      = WaclWaitForEvent;
-    np.createFileHandlerProc = WaclCreateFileHandler;
-    np.deleteFileHandlerProc = WaclDeleteFileHandler;
+    np.initNotifierProc      = SurfTclInitNotifier;
+    np.finalizeNotifierProc  = SurfTclFinalizeNotifier;
+    np.alertNotifierProc     = SurfTclAlertNotifier;
+    np.serviceModeHookProc   = SurfTclServiceModeHook;
+    np.setTimerProc          = SurfTclSetTimer;
+    np.waitForEventProc      = SurfTclWaitForEvent;
+    np.createFileHandlerProc = SurfTclCreateFileHandler;
+    np.deleteFileHandlerProc = SurfTclDeleteFileHandler;
     Tcl_SetNotifier(&np);
 }
 
@@ -96,7 +96,7 @@ Wacl_InstallNotifier(void)
  * (channel bytes, due timers, idle tasks) before returning control to JS.
  */
 int
-Wacl_ServiceEvents(void)
+SurfTcl_ServiceEvents(void)
 {
     int serviced = 0;
     while (Tcl_DoOneEvent(TCL_ALL_EVENTS | TCL_DONT_WAIT)) {
@@ -106,7 +106,7 @@ Wacl_ServiceEvents(void)
 }
 
 /*
- * Wacl_Yield — the Tcl-side `await`. Relinquish the wasm thread to the JS
+ * SurfTcl_Yield — the Tcl-side `await`. Relinquish the wasm thread to the JS
  * event loop and resume *in place*. emscripten_sleep(0) unwinds the wasm
  * stack (Asyncify) back to the JS loop, lets it drain one turn — pending
  * DOM events, timers, repaint — then a setTimeout(0) rewinds and resumes
@@ -123,32 +123,32 @@ Wacl_ServiceEvents(void)
  * only a nested *yield* is refused, before it can reach emscripten_sleep.
  *
  * Requires an Asyncify (or, later, JSPI) build. The default build leaves
- * WACL_ASYNCIFY undefined, so the command is present but reports that it
+ * SURFTCL_ASYNCIFY undefined, so the command is present but reports that it
  * needs a yield-capable runtime rather than failing to link.
  */
-static int waclYieldInFlight = 0;
+static int surftclYieldInFlight = 0;
 
 int
-Wacl_Yield(Tcl_Interp *interp)
+SurfTcl_Yield(Tcl_Interp *interp)
 {
-    if (waclYieldInFlight) {
+    if (surftclYieldInFlight) {
         Tcl_SetObjResult(interp, Tcl_NewStringObj(
-            "wacl: can't yield - an evaluation is already suspended at a "
+            "surftcl: can't yield - an evaluation is already suspended at a "
             "yield point; defer with `after 0 [list ...]`", -1));
-        Tcl_SetErrorCode(interp, "WACL", "YIELD", "NESTED", (char *) NULL);
+        Tcl_SetErrorCode(interp, "SURFTCL", "YIELD", "NESTED", (char *) NULL);
         return TCL_ERROR;
     }
-#ifdef WACL_ASYNCIFY
-    waclYieldInFlight = 1;
+#ifdef SURFTCL_ASYNCIFY
+    surftclYieldInFlight = 1;
     emscripten_sleep(0);
-    waclYieldInFlight = 0;
+    surftclYieldInFlight = 0;
     /* Our own result, not whatever a re-entrant eval left behind. */
     Tcl_ResetResult(interp);
     return TCL_OK;
 #else
     Tcl_SetObjResult(interp, Tcl_NewStringObj(
-        "wacl: ::wacl::js::yield requires an Asyncify build", -1));
-    Tcl_SetErrorCode(interp, "WACL", "YIELD", "UNSUPPORTED", (char *) NULL);
+        "surftcl: ::surftcl::js::yield requires an Asyncify build", -1));
+    Tcl_SetErrorCode(interp, "SURFTCL", "YIELD", "UNSUPPORTED", (char *) NULL);
     return TCL_ERROR;
 #endif
 }

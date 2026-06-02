@@ -1,6 +1,6 @@
-# wacl::js bridge — tcltest suite.
+# surftcl::js bridge — tcltest suite.
 #
-# Exercises the bridge surface (::wacl::js::call) directly, not through a
+# Exercises the bridge surface (::surftcl::js::call) directly, not through a
 # package. Focus: the re-entrancy and error-propagation contract that the
 # removal of the old eval-fence rests on. JS and Tcl share one thread and
 # one event loop; a JS function invoked mid-Tcl may call straight back into
@@ -16,16 +16,16 @@ package require tcltest
 namespace import ::tcltest::*
 
 # ----- re-entrancy: a JS callback can call straight back into Tcl -----
-test bridge-reentrant-1.1 {a JS function may synchronously re-enter Wacl_Eval} -body {
-    # Under the old fence this raised "re-entrant Wacl_Eval not supported".
+test bridge-reentrant-1.1 {a JS function may synchronously re-enter SurfTcl_Eval} -body {
+    # Under the old fence this raised "re-entrant SurfTcl_Eval not supported".
     # Now it just works: the inner eval runs while the outer js::call is
     # still on the stack, the way Tcl re-enters itself everywhere else.
-    ::wacl::js::call eval {wacl.Eval("expr 2+3")}
+    ::surftcl::js::call eval {surftcl.Eval("expr 2+3")}
 } -result 5
 
 test bridge-reentrant-1.2 {the re-entered eval shares the one interpreter} -body {
     set ::v 10
-    ::wacl::js::call eval {wacl.Eval("incr ::v 5")}
+    ::surftcl::js::call eval {surftcl.Eval("incr ::v 5")}
     set ::v
 } -cleanup {
     unset -nocomplain ::v
@@ -33,23 +33,23 @@ test bridge-reentrant-1.2 {the re-entered eval shares the one interpreter} -body
 
 # ----- errors: translated, catchable, and never silently swallowed -----
 test bridge-error-1.1 {a thrown JS exception becomes a catchable Tcl error} -body {
-    catch {::wacl::js::call eval {throw new Error("boom")}} msg
+    catch {::surftcl::js::call eval {throw new Error("boom")}} msg
     set msg
 } -match glob -result {*boom*}
 
 test bridge-error-1.2 {a thrown JS exception raises TCL_ERROR} -body {
-    catch {::wacl::js::call eval {throw new Error("boom")}}
+    catch {::surftcl::js::call eval {throw new Error("boom")}}
 } -result 1
 
 test bridge-error-2.1 {a nested Eval failure propagates its message out} -body {
-    catch {::wacl::js::call eval {wacl.Eval("error inner-boom")}} msg
+    catch {::surftcl::js::call eval {surftcl.Eval("error inner-boom")}} msg
     set msg
 } -match glob -result {*inner-boom*}
 
 test bridge-error-2.2 {the nested failure's trace survives in errorInfo} -body {
     # The whole point of NOT save/restoring interp state: a propagated
     # JS-side failure leaves its Tcl trace where a handler can read it.
-    catch {::wacl::js::call eval {wacl.Eval("error inner-boom")}} msg opts
+    catch {::surftcl::js::call eval {surftcl.Eval("error inner-boom")}} msg opts
     string match {*inner-boom*} [dict get $opts -errorinfo]
 } -result 1
 
