@@ -515,6 +515,15 @@ require(["tcl/wacl"], function (m) {
       interp.Eval("lappend auto_path /packages");
       interp.Eval("package require wacl::dom");
 
+      // `update` yields to the JS event loop (Asyncify-backed), so editor
+      // code can keep the page live across long work. See the REPL for the
+      // rationale; same six-line wrapper.
+      interp.Eval(`
+        namespace eval ::wacl::OLD {}
+        rename update ::wacl::OLD::update
+        proc update {args} { ::wacl::OLD::update {*}$args; ::wacl::js::yield }
+      `);
+
       // Examples ribbon.
       examples.forEach((ex) => {
         const b = document.createElement("button");
@@ -538,16 +547,18 @@ require(["tcl/wacl"], function (m) {
       loadingEl.textContent = "load failed — see Output";
     });
 
+    // EvalAsync: editor code may `update` (yield) — e.g. an animation loop
+    // that wants the page to repaint between steps. Fire-and-forget so the
+    // page stays live while it runs.
     function runEditor() {
       const src = editorEl.value;
       const echo = src.split("\n").map(l => "$ " + l).join("\n");
       appendOut(echo + "\n", "echo");
-      try {
-        const r = interp.Eval(src);
+      interp.EvalAsync(src).then((r) => {
         if (r !== "") appendOut("= " + r + "\n");
-      } catch (e) {
+      }).catch((e) => {
         appendOut((e.errorInfo || String(e)) + "\n", "err");
-      }
+      });
     }
 
     runBtn.onclick = runEditor;

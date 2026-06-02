@@ -2,10 +2,8 @@
 #
 # Targets that matter:
 #   make tcl          download and unpack Tcl 9 source under ./tcl/
-#   make minimal      build wacl-minimal.{js,wasm} and copy them into
-#                     wacl-minimal-demo/
-#   make asyncify     opt-in yield-capable build (wacl-asyncify.{js,wasm});
-#                     bigger + slower, not committed. See docs/event-loop.md
+#   make minimal      build wacl-minimal.{js,wasm} (Asyncify/yield-capable,
+#                     ~4MB) and copy them into wacl-minimal-demo/
 #   make packages     build the per-package release zips under ext/build/
 #   make test         build the package zips, then run the headless suite
 #   make clean        remove build artefacts but keep ./tcl/
@@ -28,7 +26,7 @@ WASMFLAGS_MINIMAL = \
     --pre-js preGeneratedJs.js --post-js js/postJsRequire.js $(BCFLAGS) \
     -s FORCE_FILESYSTEM=1 \
     -s ALLOW_TABLE_GROWTH=1 \
-    -s EXPORTED_RUNTIME_METHODS='["cwrap","FS","addFunction","removeFunction","getValue","UTF8ToString"]' \
+    -s EXPORTED_RUNTIME_METHODS='["cwrap","ccall","FS","addFunction","removeFunction","getValue","UTF8ToString"]' \
     --embed-file tcl/unix/libtcl9.0.3.zip@/lib/tcl.zip
 
 WACLEXPORTS = \
@@ -48,7 +46,7 @@ WACLCC = \
     -I tcl/unix -I tcl/generic -I tcl/libtommath -I opt $(BCFLAGS) \
     -DSTATIC_BUILD=1 -DBUILD_tcl -DTCL_THREADS=0
 
-.PHONY: minimal asyncify packages test clean distclean fullclean
+.PHONY: minimal packages test clean distclean fullclean
 
 default: minimal
 
@@ -84,42 +82,28 @@ tcl/unix/Makefile: tcl
 tcl/unix/libtcl9.0.a: tcl/unix/Makefile
 	cd tcl/unix && emmake make libtcl9.0.a
 
+# The baseline build is Asyncify-enabled: -DWACL_ASYNCIFY turns on
+# `::wacl::js::yield` (emscripten_sleep-backed) and -sASYNCIFY instruments
+# the module so a synchronous Tcl call can unwind to the JS event loop and
+# resume in place. This is what makes `interp.Eval` async and the `update`
+# wrapper work — the event-loop story SurfTcl is built on (docs/event-loop.md).
+# It costs ~1.5x size (≈4MB) and a speed tax; Binaryen instruments broadly
+# because Tcl's function pointers defeat call-graph scoping. JSPI is the
+# lighter successor once it's cross-browser — the C and the `update` wrapper
+# are mechanism-agnostic, so that swap is localized.
 minimal: tcl/unix/libtcl9.0.a
-	emcc -c $(WACLCC) opt/wacl.c -o wacl.o
-	emcc -c $(WACLCC) opt/waclNotifier.c -o waclNotifier.o
-	emcc -c $(WACLCC) opt/waclAppInit.c -o waclAppInit.o
-	cp js/preJsRequire.js preGeneratedJs.js
-	emcc $(WASMFLAGS_MINIMAL) $(WACLEXPORTS) \
-	    wacl.o waclNotifier.o waclAppInit.o tcl/unix/libtcl9.0.a \
-	    -o wacl-minimal.js
-	cp wacl-minimal.js wacl-minimal.wasm wacl-minimal-demo/
-
-# Opt-in Asyncify build — the yield-capable variant. Compiling
-# wacl.c/waclNotifier.c with -DWACL_ASYNCIFY turns on `::wacl::js::yield`
-# (emscripten_sleep-backed); -sASYNCIFY instruments the module so a
-# synchronous Tcl call can unwind to the JS event loop and resume in
-# place. Costs ~1.5x size and a speed tax (Binaryen instruments broadly,
-# since Tcl's function pointers defeat call-graph scoping). NOT the
-# committed baseline: outputs wacl-asyncify.{js,wasm} (gitignored), and
-# JS must call Eval via `ccall(..., {async:true})`. Proven by the yield
-# spike — see docs/event-loop.md. JSPI is the lighter successor once it's
-# cross-browser; the C and the `update` wrapper are mechanism-agnostic.
-asyncify: tcl/unix/libtcl9.0.a
 	emcc -c $(WACLCC) -DWACL_ASYNCIFY opt/wacl.c -o wacl.o
 	emcc -c $(WACLCC) -DWACL_ASYNCIFY opt/waclNotifier.c -o waclNotifier.o
 	emcc -c $(WACLCC) opt/waclAppInit.c -o waclAppInit.o
 	cp js/preJsRequire.js preGeneratedJs.js
-	emcc --pre-js preGeneratedJs.js --post-js js/postJsRequire.js $(BCFLAGS) \
-	    -s FORCE_FILESYSTEM=1 -s ALLOW_TABLE_GROWTH=1 \
+	emcc $(WASMFLAGS_MINIMAL) $(WACLEXPORTS) \
 	    -sASYNCIFY -sASYNCIFY_STACK_SIZE=1048576 \
-	    -s EXPORTED_RUNTIME_METHODS='["cwrap","ccall","FS","addFunction","removeFunction","getValue","UTF8ToString"]' \
-	    --embed-file tcl/unix/libtcl9.0.3.zip@/lib/tcl.zip \
-	    $(WACLEXPORTS) \
 	    wacl.o waclNotifier.o waclAppInit.o tcl/unix/libtcl9.0.a \
-	    -o wacl-asyncify.js
+	    -o wacl-minimal.js
+	cp wacl-minimal.js wacl-minimal.wasm wacl-minimal-demo/
 
 clean:
-	rm -f *.o wacl-minimal.js wacl-minimal.wasm wacl-asyncify.js wacl-asyncify.wasm preGeneratedJs.js
+	rm -f *.o wacl-minimal.js wacl-minimal.wasm preGeneratedJs.js
 	if [ -e tcl/unix/Makefile ] ; then cd tcl/unix && make clean ; fi
 
 # We don't ever change the Tcl source tarball directly,

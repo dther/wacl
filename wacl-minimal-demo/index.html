@@ -250,14 +250,16 @@ require(["tcl/wacl"], function (wacl) {
     const term = WaclTerminal({
       mount: document.getElementById("term"),
       prompt: "% ",
+      // EvalAsync, not Eval: a line may `update` (the wrapper below yields
+      // to the JS event loop), so the result can arrive after a suspension.
+      // Fire-and-forget — the page stays live while a long command yields.
       onLine: (line) => {
         if (line === "") return;
-        try {
-          const result = interp.Eval(line);
+        interp.EvalAsync(line).then((result) => {
           if (result !== "") term.write(result + "\n");
-        } catch (e) {
+        }).catch((e) => {
           term.writeErr((e.errorInfo || String(e)) + "\n");
-        }
+        });
       },
     });
 
@@ -292,6 +294,18 @@ require(["tcl/wacl"], function (wacl) {
       if (typeof r === "object") return JSON.stringify(r);
       return String(r);
     });
+
+    // Make `update` the yield-to-the-substrate primitive: run Tcl's own
+    // queue, then hand the JS event loop a turn (::wacl::js::yield, backed
+    // by Asyncify). Six lines of Tcl, no C idletask — so a long REPL
+    // command that calls `update` keeps the page responsive instead of
+    // freezing it. This is opt-in per page; the REPL installs it so yield
+    // is there to play with.
+    interp.Eval(`
+      namespace eval ::wacl::OLD {}
+      rename update ::wacl::OLD::update
+      proc update {args} { ::wacl::OLD::update {*}$args; ::wacl::js::yield }
+    `);
 
     // JS-side packages. Each is a small Tcl module that uses the granted
     // `eval` to install its JS shims at require-time, then exposes a Tcl

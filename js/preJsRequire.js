@@ -303,6 +303,32 @@ define('tcl/wacl', function () {
         return _getStringResult(this.interp);
       },
 
+      // Async sibling of Eval — the top-level entry for scripts that may
+      // YIELD (`::wacl::js::yield`, or the `update` wrapper). Returns a
+      // Promise: under the Asyncify build a yielding script unwinds the
+      // wasm stack to the JS event loop and the Promise resolves once it
+      // resumes; a non-yielding script resolves right away. Drive user
+      // input through this. Keep using the synchronous Eval above for
+      // re-entrant/internal calls that need the result immediately and
+      // are known not to yield (the JS bridge re-enters that way, and a
+      // synchronous ccall can't survive an unwind). Error handling
+      // mirrors Eval; the ::errorInfo fetch is itself a non-yielding eval.
+      EvalAsync: function (script) {
+        var interp = this.interp;
+        return Promise.resolve(
+          Module.ccall('Wacl_Eval', 'number', ['number', 'string'],
+                       [interp, script], { async: true })
+        ).then(function (rc) {
+          if (rc !== 0) {
+            var msg = _getStringResult(interp);
+            _eval(interp, 'set ::errorInfo');
+            var trace = _getStringResult(interp);
+            throw new _TclException(rc, msg, trace);
+          }
+          return _getStringResult(interp);
+        });
+      },
+
       // Failure surface. The floor is honesty, not an implicit white lie.
       //
       // The default onError handler fires three channels: stderr (visible

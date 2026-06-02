@@ -300,19 +300,48 @@ committed (guarded behind `WACL_ASYNCIFY`, so the default build is
 unchanged and stays lean); the asyncify wasm is **not** committed
 (gitignored scratch).
 
+## The async boundary — DONE
+
+Asyncify is now the **committed baseline**: `make minimal` builds the
+yield-capable ~4MB wasm (`-DWACL_ASYNCIFY -sASYNCIFY`), the separate
+`asyncify` target is gone. The JS bridge keeps **two** entry points,
+which turned out to be the right shape rather than one async `Eval`:
+
+  - **`interp.Eval(script)` — synchronous, unchanged.** For
+    re-entrant/internal calls that need the result *now* and won't yield:
+    the JS bridge re-enters this way (`::wacl::js::call eval {wacl.Eval
+    "..."}` must hand a string back to the C bridge synchronously), and a
+    sync ccall can't survive an unwind. The bridge tests and package
+    shims ride this path untouched.
+  - **`interp.EvalAsync(script)` — Promise, new.** The top-level entry for
+    scripts that may yield (`ccall {async:true}`). Under Asyncify a
+    yielding script unwinds to the JS loop and the Promise resolves on
+    resume; non-yielding resolves immediately; errors reject with the
+    `errorInfo` trace.
+
+The REPL and playground drive user input through `EvalAsync` and install
+the pure-Tcl `update` wrapper at boot, so a long command that `update`s
+keeps the page live. Test runners stay on sync `Eval` (the suite never
+yields), so headless CI is unchanged (52/0/26). Validated against the
+committed wasm: sync Eval, EvalAsync-yields-and-resumes, re-entry during
+a suspension, and async error propagation all pass.
+
 ## Next concrete steps
 
-1. **The async boundary (the big one).** The spike proves `interp.Eval`
-   must go Promise-returning once anything can yield. Rework
-   `js/preJsRequire.js` so `Eval` is async (`ccall {async:true}`) and
-   ship the pure-Tcl `update` wrapper as part of bootstrap. This is the
-   commitment to the async model; everything below rides on it.
-2. **Real-time stdio as event-loop channels**, then runtime FIFOs —
-   coupled to making `interp.Eval` async and rewiring the
-   `interp.Eval(line)`-driven demos (REPL, playground, tests page) to the
-   pump/channel model. Touches `js/preJsRequire.js` and all three pages.
+1. **Real-time stdio as event-loop channels**, then runtime FIFOs — the
+   payoff now that the async boundary exists: stdin becomes a channel JS
+   feeds and the pump drains, so `gets stdin` participates in the loop
+   instead of the one-shot `pushStdin`.
+2. **Async DOM listeners.** `wacl::dom`'s bound handler still calls the
+   *synchronous* `wacl.Eval` (so a handler that itself `update`s would
+   break, and `:this` isn't preserved across a yield). Move it to
+   `EvalAsync` with proper currentElement save/restore across the await
+   when we want handlers to be able to yield.
 3. **Re-home `wacl::chan`'s JS-side deferral** onto `Wacl_ServiceEvents`
    instead of bare `setTimeout`, once the pump is the canonical loop.
+4. **JSPI** when Safari ships it (Interop 2026): a dual build that sheds
+   the Asyncify size/speed tax where the engine supports it. The C and
+   the `update` wrapper are mechanism-agnostic, so it's a localized swap.
 
 ## Punted wiring
 

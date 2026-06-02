@@ -51,7 +51,10 @@ Tcl-source-tree level doesn't keep re-downloading; `fullclean` removes
 the tarball too if you want a genuinely cold cache.
 
 - `make` (default) = `make minimal`: build `wacl-minimal.{js,wasm}` and
-  copy into `wacl-minimal-demo/`.
+  copy into `wacl-minimal-demo/`. This is the **Asyncify** baseline
+  (`-DWACL_ASYNCIFY -sASYNCIFY`, ~4MB) — it's what makes `::wacl::js::yield`
+  and `interp.EvalAsync` work; see `docs/event-loop.md`. JSPI will shed
+  most of the size tax once it's cross-browser.
 - `make tcl`: download Tcl 9.0.3 source tarball and unpack to `tcl/`.
 - Build requires Emscripten 5.0.2 specifically — newer versions break
   this build chain. emsdk lives at `/opt/emsdk`; source
@@ -681,16 +684,21 @@ Three pages, each self-contained, no framework, AMD shim only.
   other through a stubs-table" pattern, mature, per-interp, cleaned
   up at interp teardown. `Tcl_GetAssocData` is the side door for
   more dynamic patterns.
-- **Event-loop integration (primary architecture target).** See
-  `docs/event-loop.md` for the full design. Short version: integrate the
-  JS and Tcl event loops on the **main thread** via a custom non-blocking
-  notifier (`Tcl_SetNotifier`, no Tcl-source patch) that JS pumps with
-  `Tcl_ServiceAll`/`Tcl_DoOneEvent(TCL_DONT_WAIT)`, carrying events as
-  bytes on in-memory channels (real-time stdio, then runtime FIFOs).
-  Main-thread-first because that's where sound / WebGL / gamepad input
-  (the SDL3 surface, what games need) live — a DOM-less worker can't
-  reach them, so Tk is the floor, not the ceiling. Worker mode is the
-  secondary, clean-separation path.
+- **Event-loop integration (primary architecture target) — core LANDED.**
+  See `docs/event-loop.md` for the full design and current state. The JS
+  and Tcl event loops are integrated on the **main thread** via a custom
+  non-blocking notifier (`Tcl_SetNotifier`, no Tcl-source patch) that JS
+  pumps with `Wacl_ServiceEvents` (`Tcl_DoOneEvent(TCL_DONT_WAIT)`); the
+  yield primitive (`::wacl::js::yield` → `Wacl_Yield` → `emscripten_sleep`
+  under Asyncify, one-suspension guard) lets a Tcl computation relinquish
+  to the JS loop and resume in place, with `interp.EvalAsync` the
+  Promise-returning top-level entry and the pure-Tcl `update` wrapper the
+  idiom. Spike + API checks pass. Main-thread-first because that's where
+  sound / WebGL / gamepad input (the SDL3 surface, what games need) live —
+  a DOM-less worker can't reach them, so Tk is the floor, not the ceiling.
+  Worker mode is the secondary, clean-separation path. Still ahead:
+  real-time stdio/FIFO channels, async DOM listeners, JSPI when it's
+  cross-browser.
 - **Notifier / `TCL_THREADS=0` — corrected.** Earlier notes here claimed
   Tcl 9's notifier "uses `pthread_kill` to wake the notifier thread."
   Verified false against 9.0.3: the notifier thread is woken by a
