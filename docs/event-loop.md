@@ -355,6 +355,29 @@ a suspension, and async error propagation all pass.
    the Asyncify size/speed tax where the engine supports it. The C and
    the `update` wrapper are mechanism-agnostic, so it's a localized swap.
 
+## Runaway loops — the cooperative-model weakness (pre-release must-fix)
+
+A Tcl loop that never yields (`while 1 {puts lol}` — no `update`) freezes
+the whole browser tab: the single thread is held, the JS loop can't turn.
+Confirmed in-browser. This is the inherent cost of cooperative scheduling.
+
+A JS watchdog can't catch it (the timer is frozen by the loop). But Tcl
+preempts *itself*: `Tcl_LimitCheck` (tclInterp.c:3441) **polls** the wall
+clock at command-granularity checkpoints during execution and raises a
+catchable `TCL LIMIT TIME` error when an `interp limit … -time` deadline
+passes — no event loop needed, so it works mid-freeze and the loop
+unwinds, returning control to JS. The tab recovers; it's not "close the
+tab," it's "your script was stopped." (Fires at Tcl command boundaries —
+a pure-C loop wouldn't checkpoint.)
+
+Two complementary fixes, both likely wanted:
+- **Hard time limit** (`Tcl_LimitSetTime`) as the backstop for output-less
+  loops, with the honest `supportURL` error. Tune below the browser's own
+  ~10–15s unresponsive dialog vs. tolerance for legit long no-yield work.
+- **Throttled implicit yield on stdout/stderr write** — interactive-shell
+  unbuffered semantics: an output-producing loop yields as it writes
+  (yield only if >X ms since the last, so it's cheap) and stays live.
+
 ## Punted wiring
 
 - **Unhandled-exception callback.** Unhandled Tcl errors currently go to

@@ -677,6 +677,36 @@ Three pages, each self-contained, no framework, AMD shim only.
   `pushStdin` during the suspension, and the read resumes — keeping the
   page live while it waits, with no Emscripten pipe. Implement it in that
   device/standard-channel layer; do not reach for `wacl::chan`.
+- **Runaway-loop weak preemption (cooperative-model backstop).** A Tcl
+  loop that never yields — `while 1 {puts lol}` — freezes the whole
+  browser tab: the single thread is held, so the JS event loop can't
+  turn. This is the inherent cost of cooperative scheduling (the reason
+  preemptive scheduling exists). A JS-side watchdog CANNOT catch it — any
+  `setTimeout`/`setInterval` is itself frozen by the loop it would watch.
+  But Tcl can preempt *itself*, C-side: `interp limit` / `Tcl_LimitSetTime`
+  set a wall-clock deadline that `Tcl_LimitCheck` **polls** at command-
+  granularity checkpoints during execution (tclInterp.c:3441 — `Tcl_GetTime`
+  compared to the deadline, no event loop, no timer), raising a catchable
+  `TCL LIMIT TIME` error that unwinds the loop and hands control back to
+  JS. So the tab **recovers** — the loop is genuinely stopped, not just
+  explained after the fact. (Granularity caveat: it fires at Tcl command
+  boundaries, so a pure-C tight loop with no command dispatch wouldn't
+  checkpoint — out of scope.)
+
+  Two complementary fixes, undecided:
+    1. **Hard time limit** as the backstop (with the friendly error naming
+       `supportURL`). Catches output-*less* loops (`while 1 {}`). Threshold
+       tension: browsers throw their own "page unresponsive" dialog at
+       ~10–15s, so a 30–60s limit lets the browser win the race; a shorter
+       5–10s limit recovers gracefully but could kill a legit long
+       no-yield computation.
+    2. **Implicit yield on stdout/stderr write** — unbuffered interactive-
+       shell semantics: an output-producing loop yields as it writes and
+       stays live. Doesn't catch output-less loops.
+  Likely both: a time-*throttled* yield on the output path (yield only if
+  >X ms since the last — cheap + responsive, the "ioctl" rediscovered)
+  for graceful work, plus the hard limit as the safety net. Pre-release
+  must-address; see `docs/event-loop.md`.
 - **Spitballed idea worth recording.** The user has floated: instead of
   emulating raw mode, expose a JS keypress event stream to Tcl
   (key-downs *and* key-ups), with Tcl scheduling events when bytes
