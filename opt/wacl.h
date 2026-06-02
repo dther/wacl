@@ -25,4 +25,11 @@ void Wacl_AppendJsErrorCodeElement(const char *s);
 void Wacl_InstallNotifier(void);
 int  Wacl_ServiceEvents(void);
 
+/*
+ * Tcl-side `await`: yield to the JS event loop and resume in place. Backs
+ * `::wacl::js::yield` (and the Tcl `update` wrapper). Needs an Asyncify
+ * build; see opt/waclNotifier.c and docs/event-loop.md.
+ */
+int  Wacl_Yield(Tcl_Interp *interp);
+
 #endif /* _WACL_H_ */

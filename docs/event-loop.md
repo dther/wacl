@@ -267,22 +267,46 @@ to shed the tax, Asyncify everywhere else), wired only once Safari ships
 so no one is excluded. Migrating the mechanism later is localized to the
 `js::yield` binding + build flag, not the architecture.
 
+## Yield spike — PASSED
+
+Built (`make asyncify`, `-DWACL_ASYNCIFY -sASYNCIFY
+-sASYNCIFY_STACK_SIZE=1048576`) and run in node against the three
+milestones. `Wacl_Yield` (opt/waclNotifier.c) is `emscripten_sleep(0)`
+behind the one-suspension guard; `::wacl::js::yield` fronts it (wacl.c);
+JS-entry `Wacl_Eval` now forces `TCL_EVAL_GLOBAL`. Harness: dther's
+pure-Tcl `update` wrapper + a `longcalc` proc that yields mid-computation
+(`set x 1; update; incr x 41`).
+
+  - **M0 — yield + resume in place: PASS.** `longcalc` suspends to the JS
+    loop at the `update` and resumes, returning 42. Transparent yield
+    works; the `update` wrapper is a real integration layer.
+  - **M1 — re-entry during suspension: PASS, and this is the one that
+    mattered.** While `longcalc` is parked at its yield, JS synchronously
+    re-enters (`Wacl_Eval` "set ::reentered 1") — the re-entry runs *and*
+    the parked computation resumes intact (42, `::reentered` == 1).
+    Asyncify did **not** assert on the re-entry, and the segmented exec
+    stack kept the parked operands valid. The interp-corruption fear was
+    unfounded for a single suspension, exactly as the source reading
+    predicted.
+  - **M2 — nested-yield guard: PASS.** A yield attempted *during* the
+    suspension is refused with `WACL YIELD NESTED` ("already suspended")
+    before any second `emscripten_sleep`, and the first suspension still
+    resumes. No `tclExecute.c:1034` panic, no buffer clobber.
+
+All milestones drove `Wacl_Eval` via `ccall(..., {async:true})`,
+confirming the async boundary. Cost measured: **4.15 MB vs 2.82 MB**
+(~1.47x) — the Asyncify tax, as expected. The C + Makefile target are
+committed (guarded behind `WACL_ASYNCIFY`, so the default build is
+unchanged and stays lean); the asyncify wasm is **not** committed
+(gitignored scratch).
+
 ## Next concrete steps
 
-1. **Yield spike (Asyncify).** Re-provision emsdk, build with `-sASYNCIFY`
-   (the C side: `ALLOW_TABLE_GROWTH` etc. unchanged). Add `Wacl_Yield`
-   (an `EM_ASYNC_JS`/`emscripten_sleep(0)`-equivalent that awaits a
-   `setTimeout(0)` Promise so the JS queue drains) exposed as
-   `::wacl::js::yield`, with: the **one-suspension-in-flight guard** (a
-   static flag; refuse + clear error if already suspended), JS-entry
-   `Wacl_Eval` forced to `TCL_EVAL_GLOBAL`, and the yield resetting its
-   own result on resume. Harness it with dther's pure-Tcl `update`
-   wrapper. Prove: (a) yield from deep in a computation, re-enter Tcl
-   from JS during the suspension, resume — interp survives intact;
-   (b) a *nested* yield trips the guard with a clean error, not the
-   `tclExecute.c:1034` panic; (c) `interp.Eval` is now Promise-returning.
-   Note: this build is a *scratch* artifact — don't commit the wasm until
-   we decide Asyncify is the baseline.
+1. **The async boundary (the big one).** The spike proves `interp.Eval`
+   must go Promise-returning once anything can yield. Rework
+   `js/preJsRequire.js` so `Eval` is async (`ccall {async:true}`) and
+   ship the pure-Tcl `update` wrapper as part of bootstrap. This is the
+   commitment to the async model; everything below rides on it.
 2. **Real-time stdio as event-loop channels**, then runtime FIFOs —
    coupled to making `interp.Eval` async and rewiring the
    `interp.Eval(line)`-driven demos (REPL, playground, tests page) to the

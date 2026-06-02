@@ -186,6 +186,20 @@ wacl_JsRevokeCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_OK;
 }
 
+/* ::wacl::js::yield — relinquish to the JS event loop and resume in place.
+ * Thin Tcl front for Wacl_Yield (opt/waclNotifier.c). The idiomatic caller
+ * is the Tcl `update` wrapper, not this directly. */
+static int
+wacl_JsYieldCmd(ClientData clientData, Tcl_Interp *interp,
+           int objc, Tcl_Obj *const objv[])
+{
+    if (objc != 1) {
+        Tcl_WrongNumArgs(interp, 1, objv, NULL);
+        return TCL_ERROR;
+    }
+    return Wacl_Yield(interp);
+}
+
 
 /*
  * ::wacl::dom attr|css selector key value
@@ -248,6 +262,7 @@ Wacl_Init(Tcl_Interp *interp)
     Tcl_CreateObjCommand(interp, "::wacl::js::call",   wacl_JsCallCmd,   NULL, NULL);
     Tcl_CreateObjCommand(interp, "::wacl::js::names",  wacl_JsNamesCmd,  NULL, NULL);
     Tcl_CreateObjCommand(interp, "::wacl::js::revoke", wacl_JsRevokeCmd, NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::wacl::js::yield",  wacl_JsYieldCmd,  NULL, NULL);
 
     Tcl_PkgProvide(interp, "wacl", "1.0.0");
     return TCL_OK;
@@ -275,7 +290,14 @@ Wacl_Init(Tcl_Interp *interp)
 int
 Wacl_Eval(Tcl_Interp *interp, const char *script)
 {
-    return Tcl_EvalEx(interp, script, -1, 0);
+    /*
+     * TCL_EVAL_GLOBAL: a JS-initiated evaluation is a fresh top-level call
+     * from outside, so it runs at global scope. Normally the current frame
+     * already *is* global when JS calls in; it matters across a yield,
+     * where the current frame is the parked evaluation's — without this, a
+     * re-entrant Wacl_Eval during a yield would inherit that proc's locals.
+     */
+    return Tcl_EvalEx(interp, script, -1, TCL_EVAL_GLOBAL);
 }
 
 

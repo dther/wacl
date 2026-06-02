@@ -7,6 +7,8 @@ wacl.js
 wacl.wasm
 wacl-minimal.js
 wacl-minimal.wasm
+wacl-asyncify.js
+wacl-asyncify.wasm
 /jsbuild/
 /library/
 /tcl/

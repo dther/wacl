@@ -1,5 +1,6 @@
 #include <tcl.h>
 #include <string.h>
+#include <emscripten.h>
 #include "wacl.h"
 
 /*
@@ -102,4 +103,52 @@ Wacl_ServiceEvents(void)
         serviced++;
     }
     return serviced;
+}
+
+/*
+ * Wacl_Yield — the Tcl-side `await`. Relinquish the wasm thread to the JS
+ * event loop and resume *in place*. emscripten_sleep(0) unwinds the wasm
+ * stack (Asyncify) back to the JS loop, lets it drain one turn — pending
+ * DOM events, timers, repaint — then a setTimeout(0) rewinds and resumes
+ * right here. This is what `update` (wrapped in Tcl) calls to let the
+ * substrate breathe; there is no pure-Tcl way to do it.
+ *
+ * The one-suspension guard. While we're suspended, JS may re-enter Tcl,
+ * and a re-entrant evaluation that *itself* yields would put a second
+ * unwind in flight — two suspensions interleaved, whose resume order can
+ * violate the strict LIFO discipline that both Tcl's segmented execution
+ * stack (tclExecute.c GrowEvaluationStack) and classic Asyncify's single
+ * unwind buffer assume. A re-entrant eval that runs to *completion* is
+ * fine and stays allowed (it's just a temporally-stretched nested call);
+ * only a nested *yield* is refused, before it can reach emscripten_sleep.
+ *
+ * Requires an Asyncify (or, later, JSPI) build. The default build leaves
+ * WACL_ASYNCIFY undefined, so the command is present but reports that it
+ * needs a yield-capable runtime rather than failing to link.
+ */
+static int waclYieldInFlight = 0;
+
+int
+Wacl_Yield(Tcl_Interp *interp)
+{
+    if (waclYieldInFlight) {
+        Tcl_SetObjResult(interp, Tcl_NewStringObj(
+            "wacl: can't yield - an evaluation is already suspended at a "
+            "yield point; defer with `after 0 [list ...]`", -1));
+        Tcl_SetErrorCode(interp, "WACL", "YIELD", "NESTED", (char *) NULL);
+        return TCL_ERROR;
+    }
+#ifdef WACL_ASYNCIFY
+    waclYieldInFlight = 1;
+    emscripten_sleep(0);
+    waclYieldInFlight = 0;
+    /* Our own result, not whatever a re-entrant eval left behind. */
+    Tcl_ResetResult(interp);
+    return TCL_OK;
+#else
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(
+        "wacl: ::wacl::js::yield requires an Asyncify build", -1));
+    Tcl_SetErrorCode(interp, "WACL", "YIELD", "UNSUPPORTED", (char *) NULL);
+    return TCL_ERROR;
+#endif
 }
