@@ -404,3 +404,16 @@ Two complementary fixes, both likely wanted:
   errorInfo on clean resume. The mechanism for "an exception during the
   yield surfaces to the yielding command" (vs. silently going to bgerror)
   is the part to design. Tie-in with `interp bgerror` / `::tcl::Bgerror`.
+
+  Why `bgerror` is the right home (dther): it is **not silent** — the
+  REPL prints a `bgerror` line + stack to stderr; Tk pops an alert with
+  the trace on *every* failure (twenty failing callbacks in a loop should
+  be twenty alarms). That's the correct middle ground between swallowing
+  an error and treating every exception as a total panic that unspools
+  the interpreter. The cautionary tale is Ariane 5 Flight 501: an
+  unhandled Ada `Operand_Error` (a 64→16-bit conversion overflow in the
+  inertial unit) whose handling policy was "shut the unit down" — primary
+  and backup ran the same code and died identically, vehicle lost. The
+  fault wasn't the overflow, it was *exception ⇒ panic ⇒ tear everything
+  down*. `bgerror`'s "be loud, but let the unrelated current evaluation
+  proceed" is the safer default, and SurfTcl will support that workflow.
