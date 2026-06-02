@@ -217,15 +217,72 @@ Real remaining costs are the mundane ones: Asyncify's size/speed tax
 **`interp.Eval` becomes async** (Promise-returning), which is the same
 work as rewiring the Eval-driven demos. Going async is the through-line.
 
+### The integration layer is pure Tcl (dther's wrapper)
+
+The `update`→yield wiring does **not** need a C-level `Tcl_DoWhenIdle`
+idletask. It's six lines of Tcl:
+
+    rename update ::wacl::OLD::update
+    proc update {args} {
+        ::wacl::OLD::update {*}$args
+        ::wacl::js::yield
+    }
+
+"`update` = let the substrate breathe" — process Tcl's own queue, then
+yield to JS. The mapping is honest (`update idletasks` already means
+"let deferred display work happen"; on the web that's the JS loop). What
+this layer can't conjure is `::wacl::js::yield` itself — there is no
+pure-Tcl way to relinquish the wasm thread to JS and resume in place
+(`vwait` blocks; a coroutine `yield` returns to its Tcl resumer; `after`
+just schedules). That primitive is irreducibly C + Asyncify. So the
+wrapper is a thin shell *on top of* the spike, not a way around it.
+
+Three things the wrapper forces immediately: (1) it makes nested yields
+trivially reachable — any handler that runs during a yield and calls
+`update` yields again — so the one-suspension guard is load-bearing from
+day one (it turns that into a catchable error); (2) ordering is a real
+choice — `OLD update; yield` returns with JS-fed events queued but
+undispatched, so you may want `yield` then a re-drain to a fixpoint; (3)
+yielding from inside a Tcl proc means the whole Tcl eval stack beneath it
+(TEBC, dispatch, frames) must be Asyncify-instrumented to unwind, so
+`ASYNCIFY_ONLY` scoping is impractical and you eat the broad tax.
+
+### Mechanism: Asyncify now, JSPI later (decided)
+
+Both Asyncify and JSPI give suspend/resume; the spike's findings are
+mechanism-independent. The choice is about reach, and as of June 2026:
+
+  - **JSPI** ships by default only in Chromium (Chrome 137+). Firefox has
+    it behind a flag; Safari has no implementation yet (objection dropped
+    late 2025, in progress under Interop 2026). So a JSPI-only build is
+    Chrome-or-bust — fatal for "a polite guest on the *whole* web," and
+    the same wrong trade as worker-mode-first.
+  - **Asyncify** is a build-time code transform that emits a plain wasm
+    module running on every engine today, including the node harness our
+    spike and CI use (JSPI in node needs a recent V8 + maybe a flag).
+
+So: **Asyncify for the spike and the cross-browser baseline; JSPI as a
+progressive enhancement** (eventually a dual build — JSPI where present
+to shed the tax, Asyncify everywhere else), wired only once Safari ships
+so no one is excluded. Migrating the mechanism later is localized to the
+`js::yield` binding + build flag, not the architecture.
+
 ## Next concrete steps
 
-1. **Yield spike.** Re-provision emsdk, enable Asyncify (scoped) on a
-   scratch build, and prove the narrowed safety story: yield from deep in
-   a computation, re-enter Tcl from JS during the suspension, resume,
-   confirm the interp survives; then attempt a *nested* yield and confirm
-   the one-suspension guard catches it before the `tclExecute.c:1034`
-   panic. That experiment decides Asyncify-vs-JSPI and the whole async
-   boundary.
+1. **Yield spike (Asyncify).** Re-provision emsdk, build with `-sASYNCIFY`
+   (the C side: `ALLOW_TABLE_GROWTH` etc. unchanged). Add `Wacl_Yield`
+   (an `EM_ASYNC_JS`/`emscripten_sleep(0)`-equivalent that awaits a
+   `setTimeout(0)` Promise so the JS queue drains) exposed as
+   `::wacl::js::yield`, with: the **one-suspension-in-flight guard** (a
+   static flag; refuse + clear error if already suspended), JS-entry
+   `Wacl_Eval` forced to `TCL_EVAL_GLOBAL`, and the yield resetting its
+   own result on resume. Harness it with dther's pure-Tcl `update`
+   wrapper. Prove: (a) yield from deep in a computation, re-enter Tcl
+   from JS during the suspension, resume — interp survives intact;
+   (b) a *nested* yield trips the guard with a clean error, not the
+   `tclExecute.c:1034` panic; (c) `interp.Eval` is now Promise-returning.
+   Note: this build is a *scratch* artifact — don't commit the wasm until
+   we decide Asyncify is the baseline.
 2. **Real-time stdio as event-loop channels**, then runtime FIFOs —
    coupled to making `interp.Eval` async and rewiring the
    `interp.Eval(line)`-driven demos (REPL, playground, tests page) to the

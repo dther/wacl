@@ -68,19 +68,20 @@ the tarball too if you want a genuinely cold cache.
        `pthread_kill`, which Emscripten doesn't provide because
        wasm/WebWorkers have no POSIX signals. See README/TIP arc on
        making this configure-detectable upstream eventually.
-- `opt/wacl.c` and `opt/waclAppInit.c` are compiled separately and
-  linked at the final emcc step — not bundled into `libtcl9.0.a` via
-  patch the way ecky-l's 8.6 build did. Simpler and means we don't
-  patch the Tcl source tree at all.
+- `opt/wacl.c`, `opt/waclNotifier.c`, and `opt/waclAppInit.c` are
+  compiled separately and linked at the final emcc step — not bundled
+  into `libtcl9.0.a` via patch the way ecky-l's 8.6 build did. Simpler
+  and means we don't patch the Tcl source tree at all.
 - Build flags include `ALLOW_TABLE_GROWTH=1` so the JS bridge can use
   `Module.addFunction`, and `EXPORTED_RUNTIME_METHODS` carries
   `cwrap`, `FS`, `addFunction`, `removeFunction`, `getValue`,
   `UTF8ToString`. The Tcl-callable C entry points exported via
-  `EXPORTED_FUNCTIONS` are `_main`, `_Wacl_GetInterp`, `_Tcl_Eval`,
-  `_Tcl_GetStringResult`, plus the JS-bridge four:
-  `_Wacl_RegisterJsFn`, `_Wacl_RevokeJsFn`, `_Wacl_SetJsResultString`,
-  `_Wacl_AppendJsErrorCodeElement`. If you add a C entry point and
-  call it from JS, both lists need updating.
+  `EXPORTED_FUNCTIONS` are `_main`, `_Wacl_GetInterp`, `_Wacl_Eval`,
+  `_Wacl_GetStringResult`, the JS-bridge four (`_Wacl_RegisterJsFn`,
+  `_Wacl_RevokeJsFn`, `_Wacl_SetJsResultString`,
+  `_Wacl_AppendJsErrorCodeElement`), and `_Wacl_ServiceEvents` (the
+  JS-driven event pump; see `docs/event-loop.md`). If you add a C entry
+  point and call it from JS, both lists need updating.
 - JS glue around the emcc output lives in `js/`:
   - **`js/preJsRequire.js`** — the AMD wrapper prepended to the emcc
     output. **This is the configurability lever for the JS↔Tcl bridge.**
@@ -299,20 +300,31 @@ catches, and the wasm-instantiation failure all route through
 `wacl.onError` (or, for wasm instantiation, an inline version of
 the same shape — postRun hasn't fired yet at that point).
 
-## Re-entrant Tcl_Eval fence
+## Re-entrant Tcl_Eval — fence REMOVED
 
-`opt/wacl.c`'s `Tcl_Eval` wrapper (commit 15842e8) refuses
-re-entrant calls from JS. JS is single-threaded so timers and
-microtasks can't produce concurrent eval, but a synchronous chain —
-`JS Eval → Tcl puts → FS.init output sink → JS Eval` — IS possible,
-and would have the two frames share one interpreter's result,
-errorInfo, and package-init state. Tcl handles nested evaluation
-fine when *Tcl* drives it (after, fileevent, command callbacks all
-go through `Tcl_DoOneEvent` / `Tcl_EvalObjEx`, not through our
-wrapper); only the JS-imposed flavour needs to be refused. The
-idiomatic workaround for the caller is `after 0 [list ...]`, which
-queues the inner script to run when the current evaluation stack
-unwinds.
+There used to be a fence here: `Wacl_Eval` refused any call made while
+another `Wacl_Eval` was on the stack. It's **gone** (commit "Remove
+requirement for re-entrant execution"), because it was solving the wrong
+problem. Re-entrant evaluation is normal and safe in Tcl — the engine
+re-enters itself for every `[bracket]` substitution, `eval`, and
+`fileevent` callback. JS and Tcl now share one thread and one event
+loop, so a JS callback invoked mid-Tcl (via `::wacl::js::call`) calling
+straight back into `Wacl_Eval` is exactly the cooperation we want.
+
+We deliberately do **not** save/restore interpreter state around the
+nested call: a JS-side failure that propagates leaves its
+errorInfo/errorCode intact, so the Tcl side can `catch` it or let it
+bubble to the failure surface. Silent isolation — papering over a nested
+error to keep frames "clean" — is the one thing we reject. Runaway
+self-recursion is caught by Tcl's own nesting limit ("too many nested
+evaluations (infinite loop?)"), not by us. `tests/wacl-bridge.test`
+locks this in: re-entrancy works, a thrown JS exception is a catchable
+Tcl error, and a nested-`Eval` failure surfaces with its trace.
+
+The one place re-entrancy *does* get dangerous is across a **yield**
+(suspending an evaluation while JS runs and re-enters Tcl) — but that
+needs a guard, not a fence, and the yield primitive doesn't exist yet.
+See `docs/event-loop.md` for the full analysis.
 
 ## The wacl-* packages (`/packages/`)
 
@@ -500,9 +512,10 @@ carry; when they lack it, landing these files needs a `git push` from a
 developer credential or a paste through the GH web UI. End-to-end test
 runtime ~7 seconds.
 
-Three suites exist now: `wacl-json.test`, `wacl-chan.test`, and
-`wacl-dom.test`. A dedicated bridge test (the `::wacl::js::*` surface
-itself, not via a package) is the obvious remaining follow-up.
+Four suites exist now: `wacl-json.test`, `wacl-chan.test`,
+`wacl-dom.test`, and `wacl-bridge.test` (the `::wacl::js::*` surface
+itself — re-entrancy + error propagation, the regression guard for the
+removed eval-fence).
 
 Two constraint conventions came out of writing the chan/dom suites, and
 new suites should reuse them rather than reinvent:
@@ -515,51 +528,19 @@ new suites should reuse them rather than reinvent:
     headless runner was rejected as testing the fake, not the package;
     real DOM-in-CI (jsdom) stays a deliberate, separate infra decision.
 
-  - **`eventLoop` constraint (now set to 1 — these tests FAIL on
-    purpose).** Anything that needs a deferred `chan postevent` or a
-    bound DOM handler to actually *fire* can't be satisfied by the
-    current bridge, and rather than hide that behind a SKIP we let it
-    show red. `chan-fileevent-1.1` is the honest marker: headless and
-    in-browser alike it dies on `vwait ::fired` with
-    `would wait forever` (`errorCode TCL EVENT NO_SOURCES`) — there is
-    no event producer the notifier can see, so Tcl refuses the wait.
-    `dom-bind-3.1` carries `{eventLoop dom}` so it skips headless (no
-    DOM to be meaningful) and fails in the browser for the same class
-    of reason. CI is therefore deliberately red on the event-loop gap
-    until the semantics below are solved; treat a *new* red elsewhere
-    as the regression signal.
-
-    **Why this is two bugs, not one (dther's diagnosis).** First, the
-    re-entrant eval-fence forbids exactly the workaround its own error
-    text recommends: the fence says "use `after 0`/`after idle`," but
-    a synchronous native dispatch that reaches `after idle […]` then
-    re-enters `Tcl_Eval` and is refused — the advice is a dead end.
-    Second, and deeper: the test triggers the handler with
-    `wacl::dom call … click`, which *directly invokes* the listener.
-    That exercises callback *assignment*, not event *dispatch* — it's
-    testing the wrong thing. A real browser event fires from the JS
-    event loop between Eval frames; `call click` fires synchronously
-    inside the current one. So the fix is likely a combination: rethink
-    whether the eval-fence should refuse JS-driven re-entrancy at all
-    (or refuse it more surgically), and model JS events as something
-    that genuinely round-trips through the event loop rather than a
-    direct call. This is flagged as a pre-release must-solve.
-
-    The likely shape of an event-loop-pumping runner (dther's sketch,
-    not yet built): the
-    test body arms a watchdog — `set ::done 0; after 5000 {set ::done -1}`
-    — wires the real callback to `set ::done 1` and cancel the after,
-    then `vwait ::done`. `vwait` is itself an event-loop pump, so the
-    deferred `chan postevent` / DOM dispatch gets a chance to fire; the
-    `after 5000` is the timeout floor that keeps a missed event from
-    hanging CI forever (`-1` then reads as a failure rather than a
-    deadlock). The open question is whether the headless node runner's
-    Tcl notifier actually wakes on the JS-side `setTimeout` that drives
-    those deferrals — under `TCL_THREADS=0` the notifier and the JS
-    macrotask queue are the same single thread, so a blocking `vwait`
-    inside one synchronous `Eval` may still starve the timer that would
-    wake it. Browser-side the same `vwait` has the page event loop
-    underneath it and is the more promising first target.
+  - **`eventLoop` constraint — RETIRED.** It used to gate tests that
+    needed an event to actually *fire*, deliberately red as honest
+    markers of the unsolved event semantics. The event-loop work this
+    described has since landed (custom notifier + `Wacl_ServiceEvents`
+    pump + eval-fence removal — see `docs/event-loop.md`), so the
+    markers are gone: `chan-fileevent-1.1` now tests real dispatch (JS
+    feeds bytes → `chan postevent` → `update` pumps → the `fileevent`
+    fires and drains) and passes; `dom-bind-3.1` passes for synchronous
+    dispatch now that the fence is gone. No test carries `eventLoop` any
+    more. The one thing still beyond a synchronous test — a *real*
+    event-loop-deferred DOM dispatch — waits on the yield construct
+    (Asyncify `js::yield`), documented in `docs/event-loop.md`, not
+    faked as a failing test.
 
   - **The chan byte contract is tested, NUL included.** `wacl-chan.test`
     asserts bytes 1..255 round-trip with full fidelity *and* that NUL
