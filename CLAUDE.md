@@ -393,13 +393,22 @@ already loaded keep working.
     get `{onData, write, close}`. Bytes round-trip via latin-1 to
     preserve identity (a Uint8Array byte N becomes JS code-point N
     becomes Tcl code-point N becomes the literal byte N out of a
-    binary-translation channel). JS writes call `chan postevent`
-    via setTimeout(0) to defer past any current Eval frame —
-    otherwise the re-entrant Tcl_Eval fence would refuse. This is
-    the lever for "JS as a Tcl event queue": channels with
-    `fileevent` are how arbitrary JS-side events (clicks, fetch
-    responses, WebSocket frames) dispatch into Tcl with all the
-    normal event-loop machinery.
+    binary-translation channel). This is the interface for
+    **application special-use channels** — event queues, pseudo-signal
+    callbacks, WebSocket wrappers — the lever for "JS as a Tcl event
+    queue": channels with `fileevent` are how arbitrary JS-side events
+    (clicks, fetch responses, WebSocket frames) dispatch into Tcl with
+    all the normal event-loop machinery. It is **not** the mechanism for
+    stdio — stdin/stdout/stderr are Tcl's own standard channels (Tcl
+    names and initialises them, over `FS.init` fd devices; see the
+    Emscripten stdout gotcha). Don't route the standard streams through
+    `wacl::chan`. (Reflected channels are pure Tcl + the JS bridge —
+    **no Emscripten pipes**; the only Emscripten dependency in the whole
+    event story is Asyncify, for the yield.) JS writes currently defer
+    `chan postevent` via `setTimeout(0)`; that dodge existed only for the
+    removed re-entrancy fence and can become a synchronous post now that
+    re-entry during a suspension is proven safe (a next-step in
+    `docs/event-loop.md`).
 
 **Bootstrap dependency.** Package shims look up the wacl handle as
 `globalThis.wacl`, blessed in `preJsRequire.js`'s postRun via
@@ -659,9 +668,15 @@ Three pages, each self-contained, no framework, AMD shim only.
   become files in a `patches/` directory (quilt-style) or a Tcl script
   that does the rewrites. Deferred until the build pipeline is
   otherwise stable.
-- **Real-time stdin.** The REPL is JS-driven: Enter → `interp.Eval(line)`.
-  `_Result.pushStdin` provides a queue, but there's no async event-loop
-  integration — `gets stdin` doesn't yield to the page.
+- **Real-time stdin.** The REPL is JS-driven: Enter → `interp.EvalAsync(line)`.
+  `_Result.pushStdin` provides a one-shot queue, but `gets stdin` doesn't
+  yet block-and-yield. This lives in the **standard-channel layer** —
+  stdin is Tcl's own channel over the `FS.init` fd device, **not** a
+  `wacl::chan`. The Asyncify yield makes the real fix possible: a `gets
+  stdin` on an empty device can `::wacl::js::yield`, JS feeds via
+  `pushStdin` during the suspension, and the read resumes — keeping the
+  page live while it waits, with no Emscripten pipe. Implement it in that
+  device/standard-channel layer; do not reach for `wacl::chan`.
 - **Spitballed idea worth recording.** The user has floated: instead of
   emulating raw mode, expose a JS keypress event stream to Tcl
   (key-downs *and* key-ups), with Tcl scheduling events when bytes

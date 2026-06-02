@@ -89,23 +89,33 @@ event loop:
 ### Channels as the universal carrier
 
 Rather than wiring JS into notifier internals, wire **just the channels**
-and let the bytestream be the abstraction everything else rides on:
+and let the bytestream be the abstraction everything else rides on. This
+is for *application* channels — and they are **reflected channels, with
+no Emscripten pipes**:
 
-- A real-time FIFO is an in-memory byte buffer exposed as a Tcl channel
-  (reflected channel / custom channel type — the `wacl::chan` machinery
-  is already this shape). JS appends bytes and marks the channel readable
+- An application event channel is an in-memory byte buffer exposed as a
+  Tcl reflected channel (`chan create` — the `wacl::chan` machinery is
+  already this shape). JS appends bytes and marks it readable
   (`Tcl_NotifyChannel` / a queued event); the next pump fires the
-  channel's `fileevent readable`.
-- **Real-time stdio** is the first instance: stdin/stdout/stderr become
-  these channels, so `gets stdin` and friends participate in the event
-  loop instead of the current JS-driven one-shot `pushStdin`.
-- Generalize to **runtime-created FIFOs**: `surftcl::fifo NAME` (or
-  similar) mints a fresh channel JS can attach to. DOM events, fetch
-  responses, WebSocket frames, gamepad polls — all dispatch into Tcl as
-  bytes on a channel, and Tcl can `fileevent`, buffer, reflect, and
-  reconfigure them *because they're just strings*. A bytestream into
-  local memory costs essentially nothing — it's a string buffer — yet it
-  gives Tcl full control over how events are framed and handled.
+  channel's `fileevent readable`. No Emscripten fd plumbing — the buffer
+  is JS-side, fed across the bridge. With the re-entrancy fence gone and
+  M1-style re-entry-during-a-suspension proven safe, JS can feed and post
+  *synchronously* while the interpreter is yielded (the `setTimeout(0)`
+  defer in `wacl::chan` was only there for the old fence).
+- Generalize to **runtime-created channels**: `surftcl::fifo NAME` (or
+  similar) mints a fresh `wacl::chan`-style channel JS can attach to. DOM
+  events, fetch responses, WebSocket frames, gamepad polls — all dispatch
+  into Tcl as bytes on a channel, and Tcl can `fileevent`, buffer,
+  reflect, and reconfigure them *because they're just strings*. A
+  bytestream into local memory costs essentially nothing.
+
+**stdio is NOT one of these.** stdin/stdout/stderr are Tcl's own standard
+channels — Tcl names and initialises them, over Emscripten `FS.init` fd
+devices (the stdout-gotcha wiring). They stay in that standard-channel
+layer; `wacl::chan` is for app special-use channels, never the standard
+streams. The "real-time stdin" payoff (a blocking `gets stdin` that
+yields while it waits, instead of the one-shot `pushStdin`) belongs to
+that device layer — same Asyncify yield, different home.
 
 ### The constraint that does NOT go away
 
@@ -328,10 +338,12 @@ a suspension, and async error propagation all pass.
 
 ## Next concrete steps
 
-1. **Real-time stdio as event-loop channels**, then runtime FIFOs — the
-   payoff now that the async boundary exists: stdin becomes a channel JS
-   feeds and the pump drains, so `gets stdin` participates in the loop
-   instead of the one-shot `pushStdin`.
+1. **Blocking `gets stdin` via yield** — in the standard-channel /
+   `FS.init` device layer (stdin is Tcl's own channel, *not* a
+   `wacl::chan`): an empty read yields, JS feeds via `pushStdin` during
+   the suspension, the read resumes. Keeps the page live while waiting.
+   (Application event channels are already covered by `wacl::chan` — see
+   "Channels as the universal carrier"; nothing more needed there.)
 2. **Async DOM listeners.** `wacl::dom`'s bound handler still calls the
    *synchronous* `wacl.Eval` (so a handler that itself `update`s would
    break, and `:this` isn't preserved across a yield). Move it to
