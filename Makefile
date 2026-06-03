@@ -99,13 +99,13 @@ tcl/unix/libtcl9.0.a: tcl/unix/Makefile
 # lighter successor once it's cross-browser — the C and the `update` wrapper
 # are mechanism-agnostic, so that swap is localized.
 minimal: tcl/unix/libtcl9.0.a
-	emcc -c $(SURFTCLCC) -DSURFTCL_ASYNCIFY opt/wacl.c -o surftcl.o
-	emcc -c $(SURFTCLCC) -DSURFTCL_ASYNCIFY opt/waclNotifier.c -o waclNotifier.o
-	emcc -c $(SURFTCLCC) opt/waclAppInit.c -o waclAppInit.o
+	emcc -c $(SURFTCLCC) -DSURFTCL_ASYNCIFY opt/surftcl.c -o surftcl.o
+	emcc -c $(SURFTCLCC) -DSURFTCL_ASYNCIFY opt/surftclNotifier.c -o surftclNotifier.o
+	emcc -c $(SURFTCLCC) opt/surftclAppInit.c -o surftclAppInit.o
 	cp js/preJsRequire.js preGeneratedJs.js
 	emcc $(WASMFLAGS_MINIMAL) $(SURFTCLEXPORTS) \
 	    -sASYNCIFY -sASYNCIFY_STACK_SIZE=1048576 \
-	    surftcl.o waclNotifier.o waclAppInit.o tcl/unix/libtcl9.0.a \
+	    surftcl.o surftclNotifier.o surftclAppInit.o tcl/unix/libtcl9.0.a \
 	    -o wacl-minimal.js
 	cp wacl-minimal.js wacl-minimal.wasm wacl-minimal-demo/
 	ln -sf wacl-minimal.wasm wacl-minimal-demo/wacl.wasm

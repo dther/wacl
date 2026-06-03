@@ -7,7 +7,7 @@ int SurfTcl_Init(Tcl_Interp *interp);
 
 /*
  * JS bridge entry points, exported to the JS side via -sEXPORTED_FUNCTIONS
- * and reached through Module.cwrap. See opt/wacl.c for the protocol.
+ * and reached through Module.cwrap. See opt/surftcl.c for the protocol.
  */
 const char *SurfTcl_GetStringResult(Tcl_Interp *interp);
 int  SurfTcl_RegisterJsFn(const char *name, int fnIdx);
@@ -17,7 +17,7 @@ void SurfTcl_SetJsResultString(const char *s);
 void SurfTcl_AppendJsErrorCodeElement(const char *s);
 
 /*
- * Main-thread event-loop integration (opt/waclNotifier.c). SurfTcl_InstallNotifier
+ * Main-thread event-loop integration (opt/surftclNotifier.c). SurfTcl_InstallNotifier
  * swaps in a non-blocking notifier and must run before the notifier is first
  * used (call it at the top of main). SurfTcl_ServiceEvents is the JS-driven pump:
  * it drains all ready events without blocking and returns the count.
@@ -28,7 +28,7 @@ int  SurfTcl_ServiceEvents(void);
 /*
  * Tcl-side `await`: yield to the JS event loop and resume in place. Backs
  * `::surftcl::js::yield` (and the Tcl `update` wrapper). Needs an Asyncify
- * build; see opt/waclNotifier.c and docs/event-loop.md.
+ * build; see opt/surftclNotifier.c and docs/event-loop.md.
  */
 int  SurfTcl_Yield(Tcl_Interp *interp);
 

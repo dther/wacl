@@ -1,6 +1,6 @@
 #include <tcl.h>
 #include <emscripten.h>
-#include "wacl.h"
+#include "surftcl.h"
 
 /*
  * The main interpreter, 
@@ -16,16 +16,19 @@ SurfTcl_AppInit(Tcl_Interp* interp)
     return 0;
 }
 
-static void
-EmscriptenMainLoop()
-{
-    Tcl_DoOneEvent(TCL_DONT_WAIT|TCL_ALL_EVENTS);
-}
-
 Tcl_Interp*
 SurfTcl_GetInterp()
 {
     return mainInterp;
+}
+
+static void
+SurfTclMainLoop()
+{
+    // TODO(dther) refactor this to flush the entire event queue.
+    // It should be highly unlikely that Tcl events block the browser-
+    // if they do, that's a signal that our event semantics are wrong.
+    Tcl_DoOneEvent(TCL_DONT_WAIT|TCL_ALL_EVENTS);
 }
 
 int
@@ -56,9 +59,9 @@ main(int argc, char** argv)
     if (TclZipfs_Mount(NULL, "/lib/tcl.zip", "//zipfs:/lib/tcl", NULL) != TCL_OK) {
         printf("SurfTcl: failed to mount embedded tcl_library zip\n");
     }
+
     Tcl_SetVar(mainInterp, "tcl_library",
                "//zipfs:/lib/tcl/tcl_library", TCL_GLOBAL_ONLY);
-
     if (Tcl_Init(mainInterp) != TCL_OK)
     {
         const char* errInfo = Tcl_GetVar(mainInterp, "::errorInfo", TCL_GLOBAL_ONLY);
@@ -67,7 +70,23 @@ main(int argc, char** argv)
 
     SurfTcl_AppInit(mainInterp);
 
-    emscripten_set_main_loop(EmscriptenMainLoop,0,0);
+    // TODO(dther) we want to load `main.tcl` if it's present inside the zipfs
+    // after *all initialisation* is done. Reason being:
+
+    // The manpage of zipfs states that when asked to append a zip file to a
+    // Tclsh binary, `zipfs mkimg` passes `main.tcl` to the application by a
+    // mechanism I don't yet know.
+    // `main.tcl` must be able to assume that all the necessary machinery
+    // to bootstrap from a fresh Tclsh process is present. Namely,
+    // core libraries loaded, the file system is coherent, packages are indexed,
+    // and commands needed to extend further are all ready to go.
+    // i.e., everything `SurfTcl_AppInit` has to do.
+
+    // I want "give SurfTcl a zip file that would work on a desktop"
+    // to be the idiomatic way to package applications for it,
+    // so it saves shimming to follow the same behaviour.
+
+    emscripten_set_main_loop(SurfTclMainLoop, 0, 0);
 
     return 0;
 }

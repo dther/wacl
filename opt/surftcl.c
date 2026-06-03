@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <emscripten.h>
 
-#include "wacl.h"
+#include "surftcl.h"
 
 /*
  * SurfTcl's JS bridge.
@@ -187,7 +187,7 @@ surftcl_JsRevokeCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 /* ::surftcl::js::yield — relinquish to the JS event loop and resume in place.
- * Thin Tcl front for SurfTcl_Yield (opt/waclNotifier.c). The idiomatic caller
+ * Thin Tcl front for SurfTcl_Yield (opt/surftclNotifier.c). The idiomatic caller
  * is the Tcl `update` wrapper, not this directly. */
 static int
 surftcl_JsYieldCmd(ClientData clientData, Tcl_Interp *interp,
@@ -197,6 +197,8 @@ surftcl_JsYieldCmd(ClientData clientData, Tcl_Interp *interp,
         Tcl_WrongNumArgs(interp, 1, objv, NULL);
         return TCL_ERROR;
     }
+    // TODO(dther) This should always succeed and preserve the stack.
+    // It currently does not. See surftclNotifier.c
     return SurfTcl_Yield(interp);
 }
 
