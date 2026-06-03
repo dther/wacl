@@ -8,6 +8,12 @@
 > [`ecky-l/wacl`](https://github.com/ecky-l/wacl) — not affiliated with
 > the original; see the attribution below.
 
+> **Work in progress — not for public use yet.** Everything here is
+> experimental and subject to change without notice; test at your own risk.
+> **© 2026 dther. All rights reserved.** (The forked Wacl sources and the
+> bundled Tcl remain under their own licenses — see `LICENSE` and the
+> attribution below.)
+
 Today, The average web browser is now magnitudes larger and more complex than the systems Ousterhout devised Tcl for.
 
 Wacl by Eckhard Lehman was a proof of concept that
