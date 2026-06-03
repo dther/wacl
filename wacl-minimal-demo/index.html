@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>wacl: Tcl in the browser</title>
+<title>surftcl: Tcl in the browser</title>
 
 <style>
   html, body { height: 100%; margin: 0; background: #111; color: #ddd; }
@@ -85,7 +85,7 @@
 // with a wasm interp, a WebSocket, or a mock in a test.
 //
 // Construction:
-//   const term = WaclTerminal({ mount, prompt, onLine });
+//   const term = SurfTclTerminal({ mount, prompt, onLine });
 // Methods:
 //   term.write(text)     — append text from "stdout"
 //   term.writeErr(text)  — append text from "stderr" (styled distinctly)
@@ -96,7 +96,7 @@
 // ANSI: only SGR (\x1b[...m) is honored — colors, bold, reset. Any other
 // escape sequences are stripped silently. This is a terminal *surface*,
 // not a VT100 emulator.
-function WaclTerminal({ mount, prompt = "% ", onLine = () => {} }) {
+function SurfTclTerminal({ mount, prompt = "% ", onLine = () => {} }) {
   const root = document.createElement("div");
   root.className = "term-inner";
 
@@ -116,7 +116,7 @@ function WaclTerminal({ mount, prompt = "% ", onLine = () => {} }) {
   input.autocapitalize = "off";
   input.autocomplete = "off";
   input.spellcheck = false;
-  input.setAttribute("aria-label", "wacl input");
+  input.setAttribute("aria-label", "surftcl input");
 
   // Autosize: textarea grows with content. Shrink first so scrollHeight
   // reflects the *needed* height, not the current.
@@ -245,19 +245,21 @@ function WaclTerminal({ mount, prompt = "% ", onLine = () => {} }) {
 }
 
 // Boot: wire the terminal to the Tcl interpreter once the wasm is ready.
-require(["tcl/wacl"], function (wacl) {
-  wacl.onReady(function (interp) {
-    const term = WaclTerminal({
+require(["tcl/wacl"], function (surftcl) {
+  surftcl.onReady(function (interp) {
+    const term = SurfTclTerminal({
       mount: document.getElementById("term"),
       prompt: "% ",
+      // EvalAsync, not Eval: a line may `update` (the wrapper below yields
+      // to the JS event loop), so the result can arrive after a suspension.
+      // Fire-and-forget — the page stays live while a long command yields.
       onLine: (line) => {
         if (line === "") return;
-        try {
-          const result = interp.Eval(line);
+        interp.EvalAsync(line).then((result) => {
           if (result !== "") term.write(result + "\n");
-        } catch (e) {
+        }).catch((e) => {
           term.writeErr((e.errorInfo || String(e)) + "\n");
-        }
+        });
       },
     });
 
@@ -266,13 +268,13 @@ require(["tcl/wacl"], function (wacl) {
     interp.stdout = (text) => term.write(text);
     interp.stderr = (text) => term.writeErr(text);
 
-    // `globalThis.wacl` is already bound (by preJsRequire.js, via
+    // `globalThis.surftcl` is already bound (by preJsRequire.js, via
     // Object.defineProperty before onReady fires) and points at the same
     // object `interp` does. The wacl-* packages reach the JS bridge through
-    // that global. `__interp` and `__wacl` stay as aliases for muscle
+    // that global. `__interp` and `__surftcl` stay as aliases for muscle
     // memory at the JS console — neither is load-bearing anymore.
     window.__interp = interp;
-    window.__wacl = wacl;
+    window.__surftcl = surftcl;
 
     // Grant a couple of JS functions to the inner Tcl interp. The host
     // decides what the inner interp can reach into; nothing JS-side is
@@ -280,9 +282,9 @@ require(["tcl/wacl"], function (wacl) {
     // intended use of the registry — the bootstrap-then-seal pattern is
     // to grant it, run a Tcl-side init that wires up everything domain
     // specific, then `interp.js.revoke("eval")` before user input lands.
-    //   ::wacl::js::call alert {hello world}
-    //   ::wacl::js::call eval  {Math.PI}
-    //   ::wacl::js::names
+    //   ::surftcl::js::call alert {hello world}
+    //   ::surftcl::js::call eval  {Math.PI}
+    //   ::surftcl::js::names
     interp.js.register("alert", function (args) {
       window.alert(args.join(" "));
     });
@@ -293,11 +295,23 @@ require(["tcl/wacl"], function (wacl) {
       return String(r);
     });
 
+    // Make `update` the yield-to-the-substrate primitive: run Tcl's own
+    // queue, then hand the JS event loop a turn (::surftcl::js::yield, backed
+    // by Asyncify). Six lines of Tcl, no C idletask — so a long REPL
+    // command that calls `update` keeps the page responsive instead of
+    // freezing it. This is opt-in per page; the REPL installs it so yield
+    // is there to play with.
+    interp.Eval(`
+      namespace eval ::surftcl::OLD {}
+      rename update ::surftcl::OLD::update
+      proc update {args} { ::surftcl::OLD::update {*}$args; ::surftcl::js::yield }
+    `);
+
     // JS-side packages. Each is a small Tcl module that uses the granted
     // `eval` to install its JS shims at require-time, then exposes a Tcl
     // surface. Fetched here, dropped into the in-wasm filesystem, added
     // to auto_path. They're not pre-required — the user runs
-    // `package require wacl::json` (etc) themselves, demonstrating the
+    // `package require surftcl::json` (etc) themselves, demonstrating the
     // bootstrap-then-seal flow: require what you want, then revoke eval.
     const packageFiles = [
       "packages/wacl-json/pkgIndex.tcl",
@@ -309,8 +323,10 @@ require(["tcl/wacl"], function (wacl) {
     ];
 
     function installPackages() {
+      // Package source lives at the repo root (../packages/…), one level
+      // up from the demo; the in-wasm destination stays /packages/….
       return Promise.all(packageFiles.map((p) =>
-        fetch(p).then((r) => {
+        fetch("../" + p).then((r) => {
           if (!r.ok) throw new Error(p + ": " + r.status);
           return r.text();
         }).then((body) => {
@@ -324,27 +340,27 @@ require(["tcl/wacl"], function (wacl) {
       });
     }
 
-    term.write("wacl — Tcl " + interp.Eval("info patchlevel") + "\n");
+    term.write("surftcl — Tcl " + interp.Eval("info patchlevel") + "\n");
     term.write("type tcl. enter submits, shift+enter for a newline.\n");
-    term.write("JS bridge: ::wacl::js::call NAME ARGLIST; granted: " +
-               interp.Eval("::wacl::js::names") + "\n");
+    term.write("JS bridge: ::surftcl::js::call NAME ARGLIST; granted: " +
+               interp.Eval("::surftcl::js::names") + "\n");
 
     installPackages().then(() => {
-      term.write("packages: wacl::json, wacl::dom, wacl::chan " +
-                 "(package require <name>; then ::wacl::js::revoke eval)\n\n");
+      term.write("packages: surftcl::json, surftcl::dom, surftcl::chan " +
+                 "(package require <name>; then ::surftcl::js::revoke eval)\n\n");
     }).catch((e) => {
       term.writeErr("package install failed: " + e + "\n\n");
     });
 
     term.focus();
 
-    // Things to try from the JS console — `wacl` is the canonical handle,
-    // `__interp` / `__wacl` are aliases for shorter typing:
-    //   wacl.Eval("expr {2+2}")
-    //   wacl.pushStdin("hello\n"); wacl.Eval("gets stdin")
-    //   wacl.js.register("ping", a => "pong:" + a.join(","))
-    //   wacl.Eval("::wacl::js::call ping one two three")
-    //   wacl.supportURL = "https://example.com/report"  // try an error
+    // Things to try from the JS console — `surftcl` is the canonical handle,
+    // `__interp` / `__surftcl` are aliases for shorter typing:
+    //   surftcl.Eval("expr {2+2}")
+    //   surftcl.pushStdin("hello\n"); surftcl.Eval("gets stdin")
+    //   surftcl.js.register("ping", a => "pong:" + a.join(","))
+    //   surftcl.Eval("::surftcl::js::call ping one two three")
+    //   surftcl.supportURL = "https://example.com/report"  // try an error
   });
 });
 </script>

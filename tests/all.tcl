@@ -1,4 +1,4 @@
-# wacl test driver.
+# surftcl test driver.
 #
 # Sources every *.test file in this directory, in lexical order, in the
 # same interpreter. We don't use tcltest::runAllTests because it spawns

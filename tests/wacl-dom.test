@@ -1,0 +1,285 @@
+# surftcl::dom — tcltest suite.
+#
+# surftcl::dom drives a real document, so this suite is gated on the `dom`
+# constraint: it runs for real in the browser test runner (which has a
+# DOM) and skips cleanly under the headless node runner (which doesn't).
+# The same file is sourced by both — tcltest's constraint machinery is
+# how one suite serves a capability that only one runtime provides. A
+# hand-rolled fake DOM in the headless runner would test the fake, not
+# the package; skipping is the honest option until a real DOM-in-CI
+# (jsdom or similar) is wired deliberately.
+#
+# On handler *firing*: now that the re-entrant eval-fence is gone, a
+# native dispatch — `surftcl::dom call … click`, which fires the listener
+# synchronously inside the current Tcl_Eval frame — runs the bound script
+# for real (the listener's re-entrant `surftcl.Eval` used to be refused; it
+# isn't any more). So dom-bind-3.1 exercises bind → fire → handler, and
+# passes. What it does NOT cover is a *real* event-loop-deferred dispatch:
+# a genuine user click fires from the JS event loop between frames, and
+# observing that from a test needs the "yield to the event loop" construct
+# we haven't built yet (see docs/event-loop.md). Synchronous dispatch is
+# as far as a test can honestly reach today; the async case waits on yield.
+#
+# Fixtures: every test builds its sandbox under a single #wdt container
+# appended to <body>, with element ids/classes prefixed `wdt-` so a
+# document-global querySelector can't collide with the test page's own
+# chrome. The fixture proc clears any previous container first; each
+# test also removes it in -cleanup.
+
+package require tcltest
+package require surftcl::dom
+namespace import ::tcltest::*
+
+testConstraint dom \
+    [::surftcl::js::call eval {typeof document !== "undefined" ? "1" : "0"}]
+
+# (Re)build the fixture container with the given inner HTML.
+proc fixture {html} {
+    catch {surftcl::dom remove #wdt}
+    surftcl::dom append body "<div id=\"wdt\">$html</div>"
+}
+
+# ----- prop: get / set / dot-paths -----
+test dom-prop-1.1 {get a plain property} -constraints dom -setup {
+    fixture {<input id="wdt-i" value="hi">}
+} -body {
+    surftcl::dom prop #wdt-i value
+} -cleanup {
+    surftcl::dom remove #wdt
+} -result hi
+
+test dom-prop-1.2 {set then get a property} -constraints dom -setup {
+    fixture {<input id="wdt-i" value="hi">}
+} -body {
+    surftcl::dom prop #wdt-i value bye
+    surftcl::dom prop #wdt-i value
+} -cleanup {
+    surftcl::dom remove #wdt
+} -result bye
+
+test dom-prop-1.3 {dot-path reaches into dataset} -constraints dom -setup {
+    fixture {<div id="wdt-d" data-user-id="42"></div>}
+} -body {
+    surftcl::dom prop #wdt-d dataset.userId
+} -cleanup {
+    surftcl::dom remove #wdt
+} -result 42
+
+test dom-prop-1.4 {an absent property serializes to the empty string} -constraints dom -setup {
+    fixture {<div id="wdt-d"></div>}
+} -body {
+    surftcl::dom prop #wdt-d nosuchprop
+} -cleanup {
+    surftcl::dom remove #wdt
+} -result {}
+
+test dom-prop-2.1 {no element match throws SURFTCL DOM NOMATCH} -constraints dom -body {
+    surftcl::dom prop #wdt-nope id
+} -returnCodes error -errorCode {SURFTCL DOM NOMATCH} \
+  -match glob -result {*no element matches selector: #wdt-nope}
+
+# ----- style: get / set -----
+test dom-style-1.1 {set then get an inline style} -constraints dom -setup {
+    fixture {<div id="wdt-s">x</div>}
+} -body {
+    surftcl::dom style #wdt-s color red
+    surftcl::dom style #wdt-s color
+} -cleanup {
+    surftcl::dom remove #wdt
+} -result red
+
+test dom-style-1.2 {hyphenated CSS property names work} -constraints dom -setup {
+    fixture {<div id="wdt-s">x</div>}
+} -body {
+    surftcl::dom style #wdt-s background-color blue
+    surftcl::dom style #wdt-s background-color
+} -cleanup {
+    surftcl::dom remove #wdt
+} -result blue
+
+# ----- text vs html: escaping is the whole point -----
+test dom-text-1.1 {get textContent} -constraints dom -setup {
+    fixture {<p id="wdt-t">hello</p>}
+} -body {
+    surftcl::dom text #wdt-t
+} -cleanup {
+    surftcl::dom remove #wdt
+} -result hello
+
+test dom-text-1.2 {set textContent} -constraints dom -setup {
+    fixture {<p id="wdt-t">hello</p>}
+} -body {
+    surftcl::dom text #wdt-t world
+    surftcl::dom text #wdt-t
+} -cleanup {
+    surftcl::dom remove #wdt
+} -result world
+
+test dom-text-2.1 {text escapes markup; html then shows it escaped} -constraints dom -setup {
+    fixture {<p id="wdt-t">x</p>}
+} -body {
+    surftcl::dom text #wdt-t {<b>bold</b>}
+    surftcl::dom html #wdt-t
+} -cleanup {
+    surftcl::dom remove #wdt
+} -result {&lt;b&gt;bold&lt;/b&gt;}
+
+test dom-html-1.1 {get then set innerHTML} -constraints dom -setup {
+    fixture {<div id="wdt-h"><span>a</span></div>}
+} -body {
+    set before [surftcl::dom html #wdt-h]
+    surftcl::dom html #wdt-h {<span>b</span>}
+    list $before [surftcl::dom html #wdt-h]
+} -cleanup {
+    surftcl::dom remove #wdt
+} -result {<span>a</span> <span>b</span>}
+
+# ----- call: methods by dot-path, with return values -----
+test dom-call-1.1 {call a method and read the mutated state back} -constraints dom -setup {
+    fixture {<div id="wdt-c" class="x"></div>}
+} -body {
+    surftcl::dom call #wdt-c classList.add y
+    surftcl::dom prop #wdt-c className
+} -cleanup {
+    surftcl::dom remove #wdt
+} -result {x y}
+
+test dom-call-1.2 {a method's return value comes back stringified} -constraints dom -setup {
+    fixture {<div id="wdt-c" class="x"></div>}
+} -body {
+    surftcl::dom call #wdt-c classList.contains x
+} -cleanup {
+    surftcl::dom remove #wdt
+} -result true
+
+test dom-call-1.3 {call passes string args through} -constraints dom -setup {
+    fixture {<div id="wdt-c" data-z="9"></div>}
+} -body {
+    surftcl::dom call #wdt-c getAttribute data-z
+} -cleanup {
+    surftcl::dom remove #wdt
+} -result 9
+
+test dom-call-2.1 {calling a non-method throws SURFTCL DOM NOPATH} -constraints dom -setup {
+    fixture {<div id="wdt-c"></div>}
+} -body {
+    surftcl::dom call #wdt-c definitelyNotAMethod
+} -cleanup {
+    surftcl::dom remove #wdt
+} -returnCodes error -errorCode {SURFTCL DOM NOPATH} \
+  -match glob -result {not a method:*}
+
+# ----- adjacent insertion -----
+test dom-insert-1.1 {append and prepend land at the right ends} -constraints dom -setup {
+    fixture {<div id="wdt-list"><b>mid</b></div>}
+} -body {
+    surftcl::dom prepend #wdt-list {<i>first</i>}
+    surftcl::dom append  #wdt-list {<i>last</i>}
+    surftcl::dom html #wdt-list
+} -cleanup {
+    surftcl::dom remove #wdt
+} -result {<i>first</i><b>mid</b><i>last</i>}
+
+test dom-insert-1.2 {before and after place siblings around the target} -constraints dom -setup {
+    fixture {<div id="wdt-x"><span id="wdt-mid">mid</span></div>}
+} -body {
+    surftcl::dom before #wdt-mid {<span>pre</span>}
+    surftcl::dom after  #wdt-mid {<span>post</span>}
+    surftcl::dom html #wdt-x
+} -cleanup {
+    surftcl::dom remove #wdt
+} -match glob -result {<span>pre</span>*mid*<span>post</span>}
+
+# ----- remove -----
+test dom-remove-1.1 {remove takes the element out of the document} -constraints dom -setup {
+    fixture {<div id="wdt-x"><span id="wdt-rm">bye</span></div>}
+} -body {
+    surftcl::dom remove #wdt-rm
+    surftcl::dom each #wdt-rm {}
+} -cleanup {
+    surftcl::dom remove #wdt
+} -result 0
+
+# ----- each: counting, :this, control flow, nesting -----
+test dom-each-1.1 {each returns the match count} -constraints dom -setup {
+    fixture {<ul id="wdt-u"><li class="wdt-li">1</li><li class="wdt-li">2</li><li class="wdt-li">3</li></ul>}
+} -body {
+    surftcl::dom each .wdt-li {}
+} -cleanup {
+    surftcl::dom remove #wdt
+} -result 3
+
+test dom-each-1.2 {:this resolves to each element in turn} -constraints dom -setup {
+    fixture {<ul id="wdt-u"><li class="wdt-li">a</li><li class="wdt-li">b</li><li class="wdt-li">c</li></ul>}
+} -body {
+    set acc {}
+    surftcl::dom each .wdt-li { lappend acc [surftcl::dom text :this] }
+    set acc
+} -cleanup {
+    surftcl::dom remove #wdt
+} -result {a b c}
+
+test dom-each-1.3 {break stops the iteration early} -constraints dom -setup {
+    fixture {<ul id="wdt-u"><li class="wdt-li">1</li><li class="wdt-li">2</li><li class="wdt-li">3</li></ul>}
+} -body {
+    set n 0
+    surftcl::dom each .wdt-li { incr n; if {$n == 2} break }
+    set n
+} -cleanup {
+    surftcl::dom remove #wdt
+} -result 2
+
+test dom-each-2.1 {nested each restores the outer :this on exit} -constraints dom -setup {
+    fixture {<div class="wdt-grp" id="wdt-g1"><span class="wdt-it">a</span></div><div class="wdt-grp" id="wdt-g2"><span class="wdt-it">b</span></div>}
+} -body {
+    # The inner each shifts :this to .wdt-it elements; when it ends the
+    # outer :this must come back, so the id read after the inner loop
+    # matches the id read before it.
+    set log {}
+    surftcl::dom each .wdt-grp {
+        set outer [surftcl::dom prop :this id]
+        surftcl::dom each .wdt-it {}
+        lappend log $outer/[surftcl::dom prop :this id]
+    }
+    set log
+} -cleanup {
+    surftcl::dom remove #wdt
+} -result {wdt-g1/wdt-g1 wdt-g2/wdt-g2}
+
+# ----- bind: registration mechanics (firing is event-loop territory) -----
+test dom-bind-1.1 {bind returns a handle, unbind accepts it} -constraints dom -setup {
+    fixture {<button id="wdt-btn">go</button>}
+} -body {
+    set h [surftcl::dom bind #wdt-btn click { set ::dummy 1 }]
+    set ok [string match wd* $h]
+    surftcl::dom unbind $h
+    set ok
+} -cleanup {
+    surftcl::dom remove #wdt
+} -result 1
+
+test dom-bind-2.1 {binding to nothing throws SURFTCL DOM NOMATCH} -constraints dom -body {
+    surftcl::dom bind #wdt-nope click {}
+} -returnCodes error -errorCode {SURFTCL DOM NOMATCH} \
+  -match glob -result {*no element matches selector: #wdt-nope}
+
+# ----- event: outside a handler there is no current event -----
+test dom-event-1.1 {event field outside a handler is the empty string} -constraints dom -body {
+    surftcl::dom event type
+} -result {}
+
+# ----- the firing path: synchronous dispatch (async awaits `yield`) -----
+# `call click` fires the listener synchronously, so by the time it returns
+# the bound script has already run and ::fired is set — no `vwait` (which
+# can't work on the main thread anyway). This proves bind → fire → handler.
+# A real event-loop-deferred click is the yield construct's job; see header.
+test dom-bind-3.1 {a bound handler runs when its event fires} -constraints dom -setup {
+    fixture {<button id="wdt-btn">go</button>}
+    set ::fired 0
+} -body {
+    surftcl::dom bind #wdt-btn click { set ::fired 1 }
+    surftcl::dom call #wdt-btn click
+    set ::fired
+} -cleanup {
+    surftcl::dom remove #wdt
+} -result 1

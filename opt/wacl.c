@@ -6,14 +6,14 @@
 #include "wacl.h"
 
 /*
- * Wacl's JS bridge.
+ * SurfTcl's JS bridge.
  *
  * The page (JS side) registers JS functions by name; the inner interp calls
- * them as `::wacl::js::call NAME ?ARG ...?`. Conventions:
+ * them as `::surftcl::js::call NAME ?ARG ...?`. Conventions:
  *
  *   - Args after NAME are passed varargs-style and arrive on the JS side
  *     as one array of strings. To pass a Tcl list as args, use
- *     `::wacl::js::call NAME {*}$myList`. Argument count and type checking
+ *     `::surftcl::js::call NAME {*}$myList`. Argument count and type checking
  *     happen on the JS side; the C bridge stays type-blind.
  *   - The JS function returns either a bare value (becomes the Tcl result
  *     with TCL_OK), a [status, value] pair, or throws an Error (TCL_ERROR
@@ -33,60 +33,60 @@
  * before running untrusted code — the polite-guest model.
  */
 
-typedef int (*WaclJsFn)(int argc, const char **argv);
+typedef int (*SurfTclJsFn)(int argc, const char **argv);
 
-static Tcl_HashTable waclJsRegistry;
-static int           waclJsRegistryInited = 0;
+static Tcl_HashTable surftclJsRegistry;
+static int           surftclJsRegistryInited = 0;
 
-/* Result side channel — written by the JS shim, read by wacl_JsCallCmd. */
-static Tcl_Obj *waclJsResultValue     = NULL;  /* owned ref, or NULL */
-static Tcl_Obj *waclJsResultErrorCode = NULL;  /* owned ref, or NULL */
+/* Result side channel — written by the JS shim, read by surftcl_JsCallCmd. */
+static Tcl_Obj *surftclJsResultValue     = NULL;  /* owned ref, or NULL */
+static Tcl_Obj *surftclJsResultErrorCode = NULL;  /* owned ref, or NULL */
 
 static void
-wacl_JsResetResult(void)
+surftcl_JsResetResult(void)
 {
-    if (waclJsResultValue != NULL) {
-        Tcl_DecrRefCount(waclJsResultValue);
-        waclJsResultValue = NULL;
+    if (surftclJsResultValue != NULL) {
+        Tcl_DecrRefCount(surftclJsResultValue);
+        surftclJsResultValue = NULL;
     }
-    if (waclJsResultErrorCode != NULL) {
-        Tcl_DecrRefCount(waclJsResultErrorCode);
-        waclJsResultErrorCode = NULL;
+    if (surftclJsResultErrorCode != NULL) {
+        Tcl_DecrRefCount(surftclJsResultErrorCode);
+        surftclJsResultErrorCode = NULL;
     }
 }
 
 void
-Wacl_SetJsResultString(const char *s)
+SurfTcl_SetJsResultString(const char *s)
 {
-    if (waclJsResultValue != NULL) Tcl_DecrRefCount(waclJsResultValue);
-    waclJsResultValue = Tcl_NewStringObj(s ? s : "", -1);
-    Tcl_IncrRefCount(waclJsResultValue);
+    if (surftclJsResultValue != NULL) Tcl_DecrRefCount(surftclJsResultValue);
+    surftclJsResultValue = Tcl_NewStringObj(s ? s : "", -1);
+    Tcl_IncrRefCount(surftclJsResultValue);
 }
 
 void
-Wacl_AppendJsErrorCodeElement(const char *s)
+SurfTcl_AppendJsErrorCodeElement(const char *s)
 {
-    if (waclJsResultErrorCode == NULL) {
-        waclJsResultErrorCode = Tcl_NewListObj(0, NULL);
-        Tcl_IncrRefCount(waclJsResultErrorCode);
+    if (surftclJsResultErrorCode == NULL) {
+        surftclJsResultErrorCode = Tcl_NewListObj(0, NULL);
+        Tcl_IncrRefCount(surftclJsResultErrorCode);
     }
-    Tcl_ListObjAppendElement(NULL, waclJsResultErrorCode,
+    Tcl_ListObjAppendElement(NULL, surftclJsResultErrorCode,
                              Tcl_NewStringObj(s ? s : "", -1));
 }
 
 int
-Wacl_RegisterJsFn(const char *name, int fnIdx)
+SurfTcl_RegisterJsFn(const char *name, int fnIdx)
 {
     int isNew;
-    Tcl_HashEntry *e = Tcl_CreateHashEntry(&waclJsRegistry, name, &isNew);
+    Tcl_HashEntry *e = Tcl_CreateHashEntry(&surftclJsRegistry, name, &isNew);
     Tcl_SetHashValue(e, (void *)(intptr_t) fnIdx);
     return isNew;
 }
 
 int
-Wacl_RevokeJsFn(const char *name)
+SurfTcl_RevokeJsFn(const char *name)
 {
-    Tcl_HashEntry *e = Tcl_FindHashEntry(&waclJsRegistry, name);
+    Tcl_HashEntry *e = Tcl_FindHashEntry(&surftclJsRegistry, name);
     if (e == NULL) return 0;
     Tcl_DeleteHashEntry(e);
     return 1;
@@ -94,7 +94,7 @@ Wacl_RevokeJsFn(const char *name)
 
 
 static int
-wacl_JsCallCmd(ClientData clientData, Tcl_Interp *interp,
+surftcl_JsCallCmd(ClientData clientData, Tcl_Interp *interp,
           int objc, Tcl_Obj *const objv[])
 {
     if (objc < 2) {
@@ -103,11 +103,11 @@ wacl_JsCallCmd(ClientData clientData, Tcl_Interp *interp,
     }
 
     const char *name = Tcl_GetString(objv[1]);
-    Tcl_HashEntry *e = Tcl_FindHashEntry(&waclJsRegistry, name);
+    Tcl_HashEntry *e = Tcl_FindHashEntry(&surftclJsRegistry, name);
     if (e == NULL) {
         Tcl_SetObjResult(interp, Tcl_ObjPrintf(
             "no such JS function: \"%s\"", name));
-        Tcl_SetErrorCode(interp, "WACL", "JS", "NOTFOUND", (char *)NULL);
+        Tcl_SetErrorCode(interp, "SURFTCL", "JS", "NOTFOUND", (char *)NULL);
         return TCL_ERROR;
     }
 
@@ -120,25 +120,25 @@ wacl_JsCallCmd(ClientData clientData, Tcl_Interp *interp,
         }
     }
 
-    wacl_JsResetResult();
-    WaclJsFn fn = (WaclJsFn)(intptr_t) Tcl_GetHashValue(e);
+    surftcl_JsResetResult();
+    SurfTclJsFn fn = (SurfTclJsFn)(intptr_t) Tcl_GetHashValue(e);
     int rc = fn(argc, argv);
 
     if (argv != NULL) Tcl_Free((void *) argv);
 
-    if (waclJsResultValue != NULL) {
-        Tcl_SetObjResult(interp, waclJsResultValue);
+    if (surftclJsResultValue != NULL) {
+        Tcl_SetObjResult(interp, surftclJsResultValue);
     } else {
         Tcl_ResetResult(interp);
     }
-    if (rc != TCL_OK && waclJsResultErrorCode != NULL) {
-        Tcl_SetObjErrorCode(interp, waclJsResultErrorCode);
+    if (rc != TCL_OK && surftclJsResultErrorCode != NULL) {
+        Tcl_SetObjErrorCode(interp, surftclJsResultErrorCode);
     }
     return rc;
 }
 
 static int
-wacl_JsNamesCmd(ClientData clientData, Tcl_Interp *interp,
+surftcl_JsNamesCmd(ClientData clientData, Tcl_Interp *interp,
            int objc, Tcl_Obj *const objv[])
 {
     if (objc != 1) {
@@ -147,17 +147,17 @@ wacl_JsNamesCmd(ClientData clientData, Tcl_Interp *interp,
     }
     Tcl_Obj *result = Tcl_NewListObj(0, NULL);
     Tcl_HashSearch search;
-    for (Tcl_HashEntry *e = Tcl_FirstHashEntry(&waclJsRegistry, &search);
+    for (Tcl_HashEntry *e = Tcl_FirstHashEntry(&surftclJsRegistry, &search);
          e != NULL;
          e = Tcl_NextHashEntry(&search)) {
         Tcl_ListObjAppendElement(NULL, result,
-            Tcl_NewStringObj((const char *) Tcl_GetHashKey(&waclJsRegistry, e), -1));
+            Tcl_NewStringObj((const char *) Tcl_GetHashKey(&surftclJsRegistry, e), -1));
     }
     Tcl_SetObjResult(interp, result);
     return TCL_OK;
 }
 
-/* ::wacl::js::revoke NAME — remove an entry from the JS registry.
+/* ::surftcl::js::revoke NAME — remove an entry from the JS registry.
  *
  * Tcl can revoke but not register: revoke is voluntarily declining a
  * privilege the host granted, register would be expanding privilege.
@@ -165,7 +165,7 @@ wacl_JsNamesCmd(ClientData clientData, Tcl_Interp *interp,
  * Tcl-side seal — bootstrap requires what it wants, then revokes
  * `eval` (and anything else broad) before user input lands.
  *
- * The C side just removes the hash entry. The JS-side `wacl.js.revoke`
+ * The C side just removes the hash entry. The JS-side `surftcl.js.revoke`
  * additionally frees the Emscripten function-table slot via
  * removeFunction; revoking from Tcl leaves the slot allocated until
  * either the page reloads or someone re-registers the same name
@@ -173,7 +173,7 @@ wacl_JsNamesCmd(ClientData clientData, Tcl_Interp *interp,
  * a real leak.
  */
 static int
-wacl_JsRevokeCmd(ClientData clientData, Tcl_Interp *interp,
+surftcl_JsRevokeCmd(ClientData clientData, Tcl_Interp *interp,
             int objc, Tcl_Obj *const objv[])
 {
     if (objc != 2) {
@@ -181,21 +181,35 @@ wacl_JsRevokeCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
     const char *name = Tcl_GetString(objv[1]);
-    int removed = Wacl_RevokeJsFn(name);
+    int removed = SurfTcl_RevokeJsFn(name);
     Tcl_SetObjResult(interp, Tcl_NewIntObj(removed));
     return TCL_OK;
 }
 
+/* ::surftcl::js::yield — relinquish to the JS event loop and resume in place.
+ * Thin Tcl front for SurfTcl_Yield (opt/waclNotifier.c). The idiomatic caller
+ * is the Tcl `update` wrapper, not this directly. */
+static int
+surftcl_JsYieldCmd(ClientData clientData, Tcl_Interp *interp,
+           int objc, Tcl_Obj *const objv[])
+{
+    if (objc != 1) {
+        Tcl_WrongNumArgs(interp, 1, objv, NULL);
+        return TCL_ERROR;
+    }
+    return SurfTcl_Yield(interp);
+}
+
 
 /*
- * ::wacl::dom attr|css selector key value
+ * ::surftcl::dom attr|css selector key value
  *
  * The pre-tDom DOM op. Kept as-is for now; will be retired once tDom is
  * brought in and the equivalent ops are exposed as registered JS functions
  * scoped to a chosen root node.
  */
 static int
-wacl_DomCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
+surftcl_DomCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 {
     if (objc != 5) {
         Tcl_WrongNumArgs(interp, 1, objv, "attr|css selector key val");
@@ -234,22 +248,23 @@ wacl_DomCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const 
 
 
 int
-Wacl_Init(Tcl_Interp *interp)
+SurfTcl_Init(Tcl_Interp *interp)
 {
-    if (!waclJsRegistryInited) {
-        Tcl_InitHashTable(&waclJsRegistry, TCL_STRING_KEYS);
-        waclJsRegistryInited = 1;
+    if (!surftclJsRegistryInited) {
+        Tcl_InitHashTable(&surftclJsRegistry, TCL_STRING_KEYS);
+        surftclJsRegistryInited = 1;
     }
 
-    Tcl_CreateNamespace(interp, "::wacl",     NULL, NULL);
-    Tcl_CreateNamespace(interp, "::wacl::js", NULL, NULL);
+    Tcl_CreateNamespace(interp, "::surftcl",     NULL, NULL);
+    Tcl_CreateNamespace(interp, "::surftcl::js", NULL, NULL);
 
-    Tcl_CreateObjCommand(interp, "::wacl::dom",        wacl_DomCmd,      NULL, NULL);
-    Tcl_CreateObjCommand(interp, "::wacl::js::call",   wacl_JsCallCmd,   NULL, NULL);
-    Tcl_CreateObjCommand(interp, "::wacl::js::names",  wacl_JsNamesCmd,  NULL, NULL);
-    Tcl_CreateObjCommand(interp, "::wacl::js::revoke", wacl_JsRevokeCmd, NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::surftcl::dom",        surftcl_DomCmd,      NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::surftcl::js::call",   surftcl_JsCallCmd,   NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::surftcl::js::names",  surftcl_JsNamesCmd,  NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::surftcl::js::revoke", surftcl_JsRevokeCmd, NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::surftcl::js::yield",  surftcl_JsYieldCmd,  NULL, NULL);
 
-    Tcl_PkgProvide(interp, "wacl", "1.0.0");
+    Tcl_PkgProvide(interp, "surftcl", "1.0.0");
     return TCL_OK;
 }
 
@@ -257,38 +272,37 @@ Wacl_Init(Tcl_Interp *interp)
 /*
  * Tcl 9 turned Tcl_Eval and Tcl_GetStringResult into header macros (the
  * former expands to Tcl_EvalEx, the latter to Tcl_GetString of the obj
- * result). The wacl JS bridge has been reworked to cwrap these instead.
+ * result). The surftcl JS bridge cwraps these instead.
  *
- * The Wacl_Eval wrapper also fences re-entrant calls from JS. JS is
- * single-threaded so timers/promises can't produce concurrent Eval
- * calls, but a synchronous chain — JS Eval -> Tcl puts -> FS.init
- * output sink -> JS Eval — IS possible and would have the two frames
- * share one interpreter's result, errorInfo, and package init state.
- * Tcl handles nested evaluation fine when *Tcl* drives it (after,
- * fileevent, command callbacks all go through Tcl_DoOneEvent /
- * Tcl_EvalObjEx, not through our wrapper); only the JS-imposed flavour
- * needs to be refused. The idiomatic workaround on the caller's side
- * is `after 0 [list ...]`, which queues the inner script to run when
- * the current evaluation stack unwinds.
+ * SurfTcl_Eval is a thin wrapper — no re-entrancy fence. JS and Tcl share one
+ * thread and cooperate on one event loop, so a JS callback invoked mid-Tcl
+ * (via ::surftcl::js::call) may call straight back into SurfTcl_Eval. That is
+ * fine: Tcl re-enters itself constantly — command substitution, `eval`,
+ * `fileevent` callbacks — and is built for it. We deliberately do NOT
+ * save/restore interpreter state around a nested call: a JS-side failure
+ * that propagates should leave its errorInfo/errorCode intact, so the Tcl
+ * side can `catch` it or let it bubble to the failure surface. Silent
+ * isolation — papering over a nested error to keep frames "clean" — is the
+ * one thing we reject. Runaway self-recursion is caught by Tcl's own
+ * nesting limit ("too many nested evaluations (infinite loop?)"), a clean
+ * Tcl error rather than a wasm stack overflow; we don't need our own wall.
  */
-static int waclEvalDepth = 0;
 int
-Wacl_Eval(Tcl_Interp *interp, const char *script)
+SurfTcl_Eval(Tcl_Interp *interp, const char *script)
 {
-    if (waclEvalDepth > 0) {
-        Tcl_SetObjResult(interp, Tcl_NewStringObj(
-            "wacl: re-entrant Wacl_Eval from JS is not supported; "
-            "queue the call with `after 0 [list ...]` instead", -1));
-        return TCL_ERROR;
-    }
-    waclEvalDepth++;
-    int rc = Tcl_EvalEx(interp, script, -1, 0);
-    waclEvalDepth--;
-    return rc;
+    /*
+     * TCL_EVAL_GLOBAL: a JS-initiated evaluation is a fresh top-level call
+     * from outside, so it runs at global scope. Normally the current frame
+     * already *is* global when JS calls in; it matters across a yield,
+     * where the current frame is the parked evaluation's — without this, a
+     * re-entrant SurfTcl_Eval during a yield would inherit that proc's locals.
+     */
+    return Tcl_EvalEx(interp, script, -1, TCL_EVAL_GLOBAL);
 }
 
+
 const char *
-Wacl_GetStringResult(Tcl_Interp *interp)
+SurfTcl_GetStringResult(Tcl_Interp *interp)
 {
     return Tcl_GetString(Tcl_GetObjResult(interp));
 }

@@ -1,6 +1,6 @@
   delete window.Module;
   
-  self.wacl = {
+  self.surftcl = {
     onReady: function(callback) {
       if (Module["calledRun"] != undefined && Module["calledRun"]) {
         callback(_Result);

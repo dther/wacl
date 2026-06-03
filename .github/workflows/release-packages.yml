@@ -1,0 +1,79 @@
+# Rolling "bleeding-edge" package release.
+#
+# Builds the first-party package zips (ext/build/wacl-*.zip) and
+# publishes them to a single, continuously-overwritten pre-release
+# tagged `unstable-bleeding`. The point is a set of STABLE DOWNLOAD URLs
+# that always serve the latest build:
+#
+#     https://github.com/dther/surftcl/releases/download/unstable-bleeding/wacl-dom.zip
+#     https://github.com/dther/surftcl/releases/download/unstable-bleeding/wacl-json.zip
+#     https://github.com/dther/surftcl/releases/download/unstable-bleeding/wacl-chan.zip
+#
+# These are explicitly NOT for general downstream use — the tag name,
+# the "pre-release" flag, and the release notes all say so. When a real
+# downstream exists we add a separate versioned-release workflow (tagged
+# vX.Y, immutable assets); the demo will point at THOSE by default and
+# keep a clearly-marked corner for trying the bleeding edge. This
+# channel is the bleeding edge.
+#
+# Consuming a zip (until the JS `surftcl::mount` bridge lands, this is
+# the Tcl-side shape):
+#     tcl::zipfs::mount /path/to/wacl-dom.zip //zipfs:/pkg/wacl-dom
+#     lappend auto_path //zipfs:/pkg/wacl-dom
+#     package require surftcl::dom
+#
+# Triggers: manual dispatch, and push to master. To also publish from a
+# development branch, add it under `push: branches:` — the rolling tag
+# is recreated at whatever commit triggered the run.
+
+name: release-packages
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Build package zips
+        run: make -C ext
+
+      - name: Publish rolling pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > /tmp/notes.md <<'NOTES'
+          Continuously-overwritten build of the first-party wacl-* packages,
+          straight off the development branch. **Unstable by design — do not
+          depend on these for anything real.** The download URLs are stable
+          but their contents change without notice or versioning.
+
+          Stable, versioned releases will live under separate `vX.Y` tags
+          once there is a downstream to stabilise for; use those when they
+          exist.
+
+          To load a package (Tcl side):
+
+              tcl::zipfs::mount /path/to/wacl-dom.zip //zipfs:/pkg/wacl-dom
+              lappend auto_path //zipfs:/pkg/wacl-dom
+              package require surftcl::dom
+          NOTES
+
+          # Recreate the rolling tag/release at this commit, then upload
+          # the freshly-built zips. --cleanup-tag drops the old tag so the
+          # next create re-points it; || true keeps the first-ever run
+          # (nothing to delete) from failing.
+          gh release delete unstable-bleeding --yes --cleanup-tag || true
+          gh release create unstable-bleeding ext/build/*.zip \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "Bleeding-edge packages (testing only — not for general use)" \
+            --notes-file /tmp/notes.md

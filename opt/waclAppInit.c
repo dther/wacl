@@ -4,15 +4,15 @@
 
 /*
  * The main interpreter, 
- * initialized at startup and returned by Wacl_GetMainInterp
+ * initialized at startup and returned by SurfTcl_GetMainInterp
  */
 static Tcl_Interp* mainInterp = NULL;
 
 static int
-Wacl_AppInit(Tcl_Interp* interp)
+SurfTcl_AppInit(Tcl_Interp* interp)
 {
-    if (Wacl_Init(interp) != TCL_OK)
-        printf("Error while initializing Wacl! Package will not be present");
+    if (SurfTcl_Init(interp) != TCL_OK)
+        printf("Error while initializing SurfTcl! Package will not be present");
     return 0;
 }
 
@@ -23,7 +23,7 @@ EmscriptenMainLoop()
 }
 
 Tcl_Interp*
-Wacl_GetInterp()
+SurfTcl_GetInterp()
 {
     return mainInterp;
 }
@@ -31,6 +31,14 @@ Wacl_GetInterp()
 int
 main(int argc, char** argv)
 {
+    /*
+     * Swap in the non-blocking main-thread notifier before anything touches
+     * the notifier (it initialises lazily on first use). From here on Tcl
+     * never blocks waiting for an event; the JS side drives servicing via
+     * SurfTcl_ServiceEvents. See opt/waclNotifier.c.
+     */
+    SurfTcl_InstallNotifier();
+
     mainInterp = Tcl_CreateInterp();
 
     /*
@@ -46,7 +54,7 @@ main(int argc, char** argv)
      * "tcl_library/", so init.tcl lives at //zipfs:/lib/tcl/tcl_library/.
      */
     if (TclZipfs_Mount(NULL, "/lib/tcl.zip", "//zipfs:/lib/tcl", NULL) != TCL_OK) {
-        printf("Wacl: failed to mount embedded tcl_library zip\n");
+        printf("SurfTcl: failed to mount embedded tcl_library zip\n");
     }
     Tcl_SetVar(mainInterp, "tcl_library",
                "//zipfs:/lib/tcl/tcl_library", TCL_GLOBAL_ONLY);
@@ -57,7 +65,7 @@ main(int argc, char** argv)
         printf("Error while calling Tcl_Init: %s", errInfo);
     }
 
-    Wacl_AppInit(mainInterp);
+    SurfTcl_AppInit(mainInterp);
 
     emscripten_set_main_loop(EmscriptenMainLoop,0,0);
 

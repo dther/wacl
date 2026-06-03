@@ -1,6 +1,13 @@
 # Tclsh? In *my* web browser?
 > It's more likely than you think.
 
+> **This project is now called SurfTcl** (formerly *Wacl*). The rename is
+> mid-flight: code identifiers, namespaces, and packages are `surftcl` /
+> `SurfTcl`, but build artifacts and some paths still carry the old
+> `wacl-` prefix. SurfTcl is a fork of Eckhard Lehmann's
+> [`ecky-l/wacl`](https://github.com/ecky-l/wacl) — not affiliated with
+> the original; see the attribution below.
+
 Today, The average web browser is now magnitudes larger and more complex than the systems Ousterhout devised Tcl for.
 
 Wacl by Eckhard Lehman was a proof of concept that
@@ -19,7 +26,7 @@ the latest `tdom` is no longer patch-compatible,
 and I wanted to see the minimum viable product I could build *right now*
  before I go messing with all the levers.
 
-This minimal wacl demo doesn't have nearly as much features as the original,
+This minimal SurfTcl demo doesn't have nearly as much features as the original,
 but I intend to expand upon it with all the *stuff* that's happened since
 Wasm and WebComponents were adopted as web technology standards,
 and now that the Web has become more-or-less feature complete.
@@ -38,7 +45,7 @@ Dead links need to be fixed, and new patches need to be tested,
 for them to be re-integrated.
 
 Makefile has been updated with new recipes for `wacl-minimal`.
-This builds Wacl without pulling in external dependencies.
+This builds SurfTcl without pulling in external dependencies.
 
 ## What works?
 - Interpreter definitely interprets Tcl.

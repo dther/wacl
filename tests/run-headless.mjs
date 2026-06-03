@@ -17,7 +17,7 @@ const here    = path.dirname(fileURLToPath(import.meta.url));
 const root    = path.resolve(here, '..');
 const demoDir = path.join(root, 'wacl-minimal-demo');
 
-// AMD shim and a fetch surrogate. The wacl bundle does
+// AMD shim and a fetch surrogate. The surftcl bundle does
 // XMLHttpRequest('GET', 'wacl.wasm') with a relative URL, which we
 // resolve against demoDir.
 const __modules = {};
@@ -65,7 +65,7 @@ sandbox.require(['tcl/wacl'], (m) => {
     // Grant `eval` — every wacl-* package needs it for its JS shim
     // install. (CI mirrors the production bootstrap shape.)
     vm.runInContext(`
-      wacl.js.register("eval", function (args) {
+      surftcl.js.register("eval", function (args) {
         var r = (0, eval)(args[0]);
         return r === undefined ? "" :
                (typeof r === "object" ? JSON.stringify(r) : String(r));
@@ -82,20 +82,36 @@ sandbox.require(['tcl/wacl'], (m) => {
       FS.writeFile(full, body);
     }
 
-    // Packages live under the demo dir (that's where the deployable
-    // copies sit). Tests live at repo root under tests/.
-    const packageFiles = [
-      'packages/wacl-json/pkgIndex.tcl',
-      'packages/wacl-json/wacl-json.tcl',
-    ];
+    // Packages are loaded the way a real consumer loads them: from the
+    // release zips the ext/ pipeline builds, mounted via zipfs and added
+    // to auto_path. So this runner validates the actual shipped artifact
+    // — if a zip is malformed or a package fails to load from one, the
+    // suite goes red. Build them first with `make -C ext` (or `make
+    // test` at the repo root, which does both).
+    const pkgNames = ['wacl-json', 'wacl-dom', 'wacl-chan'];
+    const extBuild = path.join(root, 'ext', 'build');
+    try { FS.mkdirTree('/zips'); } catch (e) {}
+    for (const name of pkgNames) {
+      const zipPath = path.join(extBuild, name + '.zip');
+      if (!fs.existsSync(zipPath)) {
+        console.error(`missing ${zipPath} — run 'make -C ext' to build the package zips first`);
+        process.exit(2);
+      }
+      const dest = '/zips/' + name + '.zip';
+      FS.writeFile(dest, fs.readFileSync(zipPath));
+      interp.Eval(`tcl::zipfs::mount ${dest} //zipfs:/pkg/${name}`);
+      interp.Eval(`lappend auto_path //zipfs:/pkg/${name}`);
+    }
+
+    // Tests live at repo root under tests/.
     const testFiles = [
       'tests/all.tcl',
       'tests/wacl-json.test',
+      'tests/wacl-dom.test',
+      'tests/wacl-chan.test',
+      'tests/wacl-bridge.test',
     ];
-
-    for (const p of packageFiles) inject(p, demoDir);
-    for (const p of testFiles)    inject(p, root);
-    interp.Eval('lappend auto_path /packages');
+    for (const p of testFiles) inject(p, root);
 
     try {
       interp.Eval('source /tests/all.tcl');

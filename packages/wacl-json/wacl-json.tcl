@@ -1,9 +1,9 @@
-# wacl::json — JSON syscalls into the browser.
+# surftcl::json — JSON syscalls into the browser.
 #
-# Surface (use as an ensemble — ::wacl::json get ..., ::wacl::json exists ...,
-# or `namespace import ::wacl::json` for the short `json get ...` form):
+# Surface (use as an ensemble — ::surftcl::json get ..., ::surftcl::json exists ...,
+# or `namespace import ::surftcl::json` for the short `json get ...` form):
 #
-#   ::wacl::json get $blob ?key ...?
+#   ::surftcl::json get $blob ?key ...?
 #       Returns the value at the given path. Object keys are strings,
 #       array indices are numeric (string form — Tcl convention).
 #       null returns the empty string. If the value at the path is
@@ -11,7 +11,7 @@
 #       you can recurse with another `get`. Missing paths throw
 #       TCL_ERROR with errorCode {JSON BAD_PATH}.
 #
-#   ::wacl::json extract $blob ?key ...?
+#   ::surftcl::json extract $blob ?key ...?
 #       Like `get`, but returns the value as a JSON fragment — quoted
 #       strings stay quoted, booleans stay bare, null stays bare.
 #       The disambiguation lever for cases where `get` collapses (say)
@@ -20,38 +20,38 @@
 #       the same precedent will apply for any future typed-write
 #       commands.
 #
-#   ::wacl::json exists $blob ?key ...?
+#   ::surftcl::json exists $blob ?key ...?
 #       1 if the path is present (even if the value is null), 0 otherwise.
 #
 # We deliberately ship no `stringify` here. Tcl can't discriminate the
 # string "true" from a boolean true — everything is a string — so building
 # JSON from Tcl values is ambiguous in a way reading is not. For the
-# reverse direction, escape via `::wacl::js::call eval {JSON.stringify(...)}`
+# reverse direction, escape via `::surftcl::js::call eval {JSON.stringify(...)}`
 # until we have a proper Tcl-side JSON builder.
 #
 # Bootstrap: this package self-installs its JS shims at require time using
 # the host-granted `eval`. So the host must have registered `eval` before
-# `package require wacl::json`. Intended sequence:
+# `package require surftcl::json`. Intended sequence:
 #     # page-side JS:   interp.js.register("eval", ...)
-#     package require wacl::json
-#     package require wacl::dom
+#     package require surftcl::json
+#     package require surftcl::dom
 #     ...
 #     # page-side JS:   interp.js.revoke("eval")
 
-if {[info commands ::wacl::js::names] eq ""} {
-    error "wacl::json requires the wacl JS bridge"
+if {[info commands ::surftcl::js::names] eq ""} {
+    error "surftcl::json requires the surftcl JS bridge"
 }
-if {[lsearch -exact [::wacl::js::names] eval] < 0} {
-    error "wacl::json install requires the host to have granted `eval`"
+if {[lsearch -exact [::surftcl::js::names] eval] < 0} {
+    error "surftcl::json install requires the host to have granted `eval`"
 }
 
-namespace eval ::wacl::json {
+namespace eval ::surftcl::json {
     namespace export get extract exists
     namespace ensemble create
 }
 
-::wacl::js::call eval {
-    wacl.js.register("__wacl_json_get", function (args) {
+::surftcl::js::call eval {
+    surftcl.js.register("__surftcl_json_get", function (args) {
         var blob = args[0];
         var path = args.slice(1);
         var cur;
@@ -68,7 +68,7 @@ namespace eval ::wacl::json {
         if (typeof cur === "object") return JSON.stringify(cur);
         return String(cur);
     });
-    wacl.js.register("__wacl_json_extract", function (args) {
+    surftcl.js.register("__surftcl_json_extract", function (args) {
         var blob = args[0];
         var path = args.slice(1);
         var cur;
@@ -83,7 +83,7 @@ namespace eval ::wacl::json {
         }
         return JSON.stringify(cur);
     });
-    wacl.js.register("__wacl_json_exists", function (args) {
+    surftcl.js.register("__surftcl_json_exists", function (args) {
         var blob = args[0];
         var path = args.slice(1);
         var cur;
@@ -98,16 +98,16 @@ namespace eval ::wacl::json {
     });
 }
 
-proc ::wacl::json::get {blob args} {
-    ::wacl::js::call __wacl_json_get $blob {*}$args
+proc ::surftcl::json::get {blob args} {
+    ::surftcl::js::call __surftcl_json_get $blob {*}$args
 }
 
-proc ::wacl::json::extract {blob args} {
-    ::wacl::js::call __wacl_json_extract $blob {*}$args
+proc ::surftcl::json::extract {blob args} {
+    ::surftcl::js::call __surftcl_json_extract $blob {*}$args
 }
 
-proc ::wacl::json::exists {blob args} {
-    ::wacl::js::call __wacl_json_exists $blob {*}$args
+proc ::surftcl::json::exists {blob args} {
+    ::surftcl::js::call __surftcl_json_exists $blob {*}$args
 }
 
-package provide wacl::json 1.0
+package provide surftcl::json 1.0
