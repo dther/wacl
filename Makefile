@@ -4,8 +4,10 @@
 #   make tcl          download and unpack Tcl 9 source under ./tcl/
 #   make minimal      build wacl-minimal.{js,wasm} (Asyncify/yield-capable,
 #                     ~4MB) and copy them into wacl-minimal-demo/
+#   make surftcl-demo build the wasm, then copy the demo site (pages, wasm,
+#                     packages, tests) into the surftcl-demo repo
 #   make packages     build the per-package release zips under ext/build/
-#   make test         build the package zips, then run the headless suite
+#   make test         build the wasm + package zips, then run the headless suite
 #   make clean        remove build artefacts but keep ./tcl/
 #   make distclean    also remove ./tcl/
 #   make fullclean    remove the Tcl source tar, too
@@ -21,6 +23,10 @@ TCLURL      = https://prdownloads.sourceforge.net/tcl/$(TCLSRC)
 
 BCFLAGS ?= -Oz -s WASM=1
 #BCFLAGS ?= -O0 -g4 -s WASM=1
+
+# The generated GitHub Pages site lives in its own repo (dther/surftcl-demo),
+# rebuilt from this tree by `make surftcl-demo`. Default to a sibling checkout.
+DEMOREPO ?= ../surftcl-demo
 
 WASMFLAGS_MINIMAL = \
     --pre-js preGeneratedJs.js --post-js js/postJsRequire.js $(BCFLAGS) \
@@ -46,16 +52,17 @@ SURFTCLCC = \
     -I tcl/unix -I tcl/generic -I tcl/libtommath -I opt $(BCFLAGS) \
     -DSTATIC_BUILD=1 -DBUILD_tcl -DTCL_THREADS=0
 
-.PHONY: minimal packages test clean distclean fullclean
+.PHONY: minimal surftcl-demo packages test clean distclean fullclean
 
 default: minimal
 
 # The package pipeline lives in ext/. The headless suite loads packages
-# from the zips it produces, so `test` builds them first.
+# from the zips it produces, and reads the wasm the same build emits into
+# wacl-minimal-demo/ — now that the wasm isn't committed, `test` builds it.
 packages:
 	$(MAKE) -C ext
 
-test: packages
+test: minimal packages
 	node tests/run-headless.mjs
 
 tcl:
@@ -101,6 +108,37 @@ minimal: tcl/unix/libtcl9.0.a
 	    surftcl.o waclNotifier.o waclAppInit.o tcl/unix/libtcl9.0.a \
 	    -o wacl-minimal.js
 	cp wacl-minimal.js wacl-minimal.wasm wacl-minimal-demo/
+	ln -sf wacl-minimal.wasm wacl-minimal-demo/wacl.wasm
+
+# Generate the surftcl-demo repo (the GitHub Pages site) from this tree: the
+# demo pages, the freshly built wasm, and the package and test files the pages
+# fetch at boot. The layout mirrors this tree so the pages' relative fetches
+# resolve unchanged; a root index.html redirects to wacl-minimal-demo/. The
+# repo is a rebuilt artifact — regenerate and commit it on every change,
+# keeping the wasm out of source-tree history. DEMOREPO is the demo checkout.
+surftcl-demo: minimal
+	mkdir -p $(DEMOREPO)/wacl-minimal-demo/playground \
+	         $(DEMOREPO)/wacl-minimal-demo/tests $(DEMOREPO)/tests
+	cp wacl-minimal-demo/index.html            $(DEMOREPO)/wacl-minimal-demo/
+	cp wacl-minimal-demo/playground/index.html $(DEMOREPO)/wacl-minimal-demo/playground/
+	cp wacl-minimal-demo/tests/index.html      $(DEMOREPO)/wacl-minimal-demo/tests/
+	cp wacl-minimal.js wacl-minimal.wasm       $(DEMOREPO)/wacl-minimal-demo/
+	cp wacl-minimal.wasm                       $(DEMOREPO)/wacl-minimal-demo/wacl.wasm
+	rm -rf $(DEMOREPO)/packages && cp -R packages $(DEMOREPO)/packages
+	cp tests/all.tcl tests/wacl-*.test         $(DEMOREPO)/tests/
+	printf '%s\n' \
+	    '<!doctype html>' \
+	    '<html lang="en">' \
+	    '<head>' \
+	    '<meta charset="utf-8">' \
+	    '<title>SurfTcl — Tcl in the browser</title>' \
+	    '<meta http-equiv="refresh" content="0; url=wacl-minimal-demo/">' \
+	    '<link rel="canonical" href="wacl-minimal-demo/">' \
+	    '</head>' \
+	    '<body>' \
+	    '<p><a href="wacl-minimal-demo/">SurfTcl demo →</a></p>' \
+	    '</body>' \
+	    '</html>' > $(DEMOREPO)/index.html
 
 clean:
 	rm -f *.o wacl-minimal.js wacl-minimal.wasm preGeneratedJs.js
