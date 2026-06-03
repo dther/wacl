@@ -32,21 +32,21 @@ WASMFLAGS_MINIMAL = \
     --pre-js preGeneratedJs.js --post-js js/postJsRequire.js $(BCFLAGS) \
     -s FORCE_FILESYSTEM=1 \
     -s ALLOW_TABLE_GROWTH=1 \
-    -s EXPORTED_RUNTIME_METHODS='["cwrap","ccall","FS","addFunction","removeFunction","getValue","UTF8ToString"]' \
+    -s EXPORTED_RUNTIME_METHODS=cwrap,ccall,FS,addFunction,removeFunction,getValue,UTF8ToString \
     --embed-file tcl/unix/libtcl9.0.3.zip@/lib/tcl.zip
 
 SURFTCLEXPORTS = \
-    -s EXPORTED_FUNCTIONS="[\
-        '_main',\
-        '_SurfTcl_GetInterp',\
-        '_SurfTcl_Eval',\
-        '_SurfTcl_GetStringResult',\
-        '_SurfTcl_RegisterJsFn',\
-        '_SurfTcl_RevokeJsFn',\
-        '_SurfTcl_SetJsResultString',\
-        '_SurfTcl_AppendJsErrorCodeElement',\
-        '_SurfTcl_ServiceEvents'\
-    ]"
+    -s EXPORTED_FUNCTIONS="\
+        _main,\
+        _SurfTcl_GetInterp,\
+        _SurfTcl_Eval,\
+        _SurfTcl_GetStringResult,\
+        _SurfTcl_RegisterJsFn,\
+        _SurfTcl_RevokeJsFn,\
+        _SurfTcl_SetJsResultString,\
+        _SurfTcl_AppendJsErrorCodeElement,\
+        _SurfTcl_ServiceEvents\
+    "
 
 SURFTCLCC = \
     -I tcl/unix -I tcl/generic -I tcl/libtommath -I opt $(BCFLAGS) \
