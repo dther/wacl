@@ -7,7 +7,8 @@
 #   make surftcl-demo build the wasm, then copy the demo site (pages, wasm,
 #                     packages, tests) into the surftcl-demo repo
 #   make packages     build the per-package release zips under ext/build/
-#   make test         build the wasm + package zips, then run the headless suite
+#   make test         build the wasm + zips, then run the tcltest + async suites
+#   make test-async   build the wasm, then run just the async/yield harness
 #   make clean        remove build artefacts but keep ./tcl/
 #   make distclean    also remove ./tcl/
 #   make fullclean    remove the Tcl source tar, too
@@ -52,7 +53,7 @@ SURFTCLCC = \
     -I tcl/unix -I tcl/generic -I tcl/libtommath -I opt $(BCFLAGS) \
     -DSTATIC_BUILD=1 -DBUILD_tcl -DTCL_THREADS=0
 
-.PHONY: minimal surftcl-demo packages test clean distclean fullclean
+.PHONY: minimal surftcl-demo packages test test-async clean distclean fullclean
 
 default: minimal
 
@@ -62,8 +63,16 @@ default: minimal
 packages:
 	$(MAKE) -C ext
 
+# `test` runs both suites: run-headless.mjs (the tcltest package suites) and
+# run-async.mjs (the yield/event-loop core, which the synchronous tcltest path
+# can't reach). `test-async` runs only the latter — it needs the wasm but not
+# the package zips, so it's the fast loop while working on the notifier/yield C.
 test: minimal packages
 	node tests/run-headless.mjs
+	node tests/run-async.mjs
+
+test-async: minimal
+	node tests/run-async.mjs
 
 tcl:
 	wget -nc $(TCLURL)
