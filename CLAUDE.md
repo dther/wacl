@@ -71,9 +71,10 @@ the tarball too if you want a genuinely cold cache.
   redirects to `wacl-minimal-demo/`. The repo is a rebuilt artifact —
   regenerate and commit on every change (messy commits are fine).
 - `make tcl`: download Tcl 9.0.3 source tarball and unpack to `tcl/`.
-- Build requires Emscripten 5.0.2 specifically — newer versions break
-  this build chain. emsdk lives at `/opt/emsdk`; source
-  `/opt/emsdk/emsdk_env.sh` before each session's first build.
+- Build requires Emscripten 5.0.2, pending a version bump. Later versions
+  are currently untested, but we want to target the latest stable version.
+  emsdk lives at `/opt/emsdk`; source `/opt/emsdk/emsdk_env.sh`
+  before each session's first build.
 - `make tcl/unix/Makefile` runs `emconfigure` then sed-patches Tcl's generated
   `Makefile` to:
     1. Add `${ZLIB_INCLUDE}` to `CC_SWITCHES`. Tcl 9 upstream bug — when
