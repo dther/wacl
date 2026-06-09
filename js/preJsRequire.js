@@ -1,5 +1,9 @@
 
 define('tcl/wacl', function () {
+  // We don't support setting the Emscripten global Module interface (yet).
+  // Settings have to occur here, in the SurfTcl source code.
+  var Module = {};
+
   var _Interp = null;
   var _getInterp = null;
   var _eval = null;
@@ -29,9 +33,6 @@ define('tcl/wacl', function () {
     });
   })(_currPath + 'wacl.wasm');
 
-  var Module;
-  if (typeof Module === 'undefined') Module = eval('(function() { try { return Module || {} } catch(e) { return {} } })()');
-
   // I/O sinks. Defaults route to the JS console — the first place a developer
   // looks when something's wrong. Pages override via _Result.stdout = fn and
   // _Result.stderr = fn after onReady. We hand the sink the bytes Tcl emitted
@@ -42,10 +43,12 @@ define('tcl/wacl', function () {
 
   // Stdin queue. _Result.pushStdin(text) appends; the FS.init input callback
   // drains one byte at a time. Returning null from the callback means EOF —
-  // a script that does `gets stdin` with an empty queue gets EOF immediately,
-  // so for interactive use the page should push bytes before evaluating
-  // anything that reads stdin. Real async stdin is the keypress-stream idea
-  // and lives in the future.
+  // a script that does `gets stdin` with an empty queue gets EOF immediately.
+
+  // TODO(dther) A script should block on `gets stdin` and yield to the browser,
+  // unless they've configured it to be non-blocking.
+  // This needs to be configured via surftclNotifier.c.
+  // Should a blocking read be a yield that also disables event processing?
   var _stdinQueue = [];
   var _stdinEof = false;
 
