@@ -342,20 +342,7 @@ header a:hover { color: var(--accent); }
   loading surftcl<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span>
 </div>
 
-<!--
-  AMD shim. require.toUrl returns "../" so wacl.wasm resolves to
-  ../wacl.wasm (the symlink that already exists in the parent dir).
--->
-<script>
-  const __modules = {};
-  function define(name, factory) { __modules[name] = factory(); }
-  define.amd = {};
-  function require(deps, cb) { cb.apply(null, deps.map(d => __modules[d])); }
-  require.toUrl = function (p) { return p === "tcl/" ? "../" : p; };
-</script>
-<script src="../wacl-minimal.js"></script>
-
-<script>
+<script type="module">
 "use strict";
 
 const sandboxEl = document.getElementById("sandbox");
@@ -477,8 +464,8 @@ surftcl::dom each ".card" {
 }` }
 ];
 
-require(["tcl/wacl"], function (m) {
-  m.onReady(function (interp) {
+import * as surftcl from "../surftcl-bootstrap.mjs"
+  surftcl.onReady(function (interp) {
     interp.stdout = t => appendOut(t);
     interp.stderr = t => appendOut(t, "err");
 
@@ -487,12 +474,7 @@ require(["tcl/wacl"], function (m) {
     // editor. A real app would `::surftcl::js::revoke eval` after the
     // requires it cares about — see the REPL demo for the seal flow.
     interp.js.register("alert", function (args) { window.alert(args.join(" ")); });
-    interp.js.register("eval", function (args) {
-      var r = (0, eval)(args[0]);
-      if (r === undefined) return "";
-      if (typeof r === "object") return JSON.stringify(r);
-      return String(r);
-    });
+    interp.GrantEval()
 
     const packageFiles = [
       "packages/wacl-json/pkgIndex.tcl",
@@ -571,7 +553,6 @@ require(["tcl/wacl"], function (m) {
 
     window.__interp = interp;
   });
-});
 </script>
 
 </body>

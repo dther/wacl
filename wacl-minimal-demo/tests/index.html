@@ -118,16 +118,7 @@ header a:hover { color: var(--accent); }
 
 <div class="loading" id="loading">loading surftcl test environment…</div>
 
-<script>
-  const __modules = {};
-  function define(name, factory) { __modules[name] = factory(); }
-  define.amd = {};
-  function require(deps, cb) { cb.apply(null, deps.map(d => __modules[d])); }
-  require.toUrl = function (p) { return p === "tcl/" ? "../" : p; };
-</script>
-<script src="../wacl-minimal.js"></script>
-
-<script>
+<script type="module">
 "use strict";
 
 const logEl = document.getElementById("log");
@@ -186,18 +177,13 @@ const filesToInject = [
   ["../../tests/wacl-bridge.test",         "/tests/wacl-bridge.test"],
 ];
 
-require(["tcl/wacl"], function (m) {
-  m.onReady(function (interp) {
+import * as surftcl from "../surftcl-bootstrap.mjs"
+  surftcl.onReady(function (interp) {
     interp.stdout = (t) => appendLog(t, false);
     interp.stderr = (t) => appendLog(t, true);
 
     // Grant eval — the packages still need it for their JS shim install.
-    interp.js.register("eval", function (args) {
-      var r = (0, eval)(args[0]);
-      if (r === undefined) return "";
-      if (typeof r === "object") return JSON.stringify(r);
-      return String(r);
-    });
+    interp.GrantEval();
 
     function fetchTo([url, dest]) {
       return fetch(url).then((r) => {
@@ -246,7 +232,6 @@ require(["tcl/wacl"], function (m) {
 
     window.__interp = interp;
   });
-});
 </script>
 
 </body>

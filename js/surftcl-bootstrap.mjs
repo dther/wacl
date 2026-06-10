@@ -1,4 +1,8 @@
 // minimum viable ES6 module!!!
+// the idea: surftcl-bootstrap.mjs is the entry point that sets up the JS API
+// surftcl.mjs is the Emscripten module encapsulating the runtime directly
+// I intend to rename these later, such that this file becomes "surftcl.mjs"
+// and there's more than one build. surftcl.mjs just selects based on configuration.
 
 import createSurfTcl from "./surftcl.mjs"
 
@@ -8,7 +12,7 @@ var _Interp = null;
 var _getInterp = null;
 var _eval = null;
 var _getStringResult = null;
-var Result = null;
+var Runtime = null;
 
 var _TclException = function (errCode, errMessage, errInfo) {
   this.errorCode = errCode;        // numeric: TCL_ERROR etc.
@@ -20,14 +24,14 @@ var _TclException = function (errCode, errMessage, errInfo) {
 };
 
 // I/O sinks. Defaults route to the JS console — the first place a developer
-// looks when something's wrong. Pages override via _Result.stdout = fn and
-// _Result.stderr = fn after onReady. We hand the sink the bytes Tcl emitted
+// looks when something's wrong. Pages override via Runtime.stdout = fn and
+// Runtime.stderr = fn after onReady. We hand the sink the bytes Tcl emitted
 // as text, *including* any trailing newline — same byte stream xterm.js or
 // a remote shell would see.
 var _stdoutSink = function (text) { console.log(text); };
 var _stderrSink = function (text) { console.error(text); };
 
-// Stdin queue. _Result.pushStdin(text) appends; the FS.init input callback
+// Stdin queue. Runtime.pushStdin(text) appends; the FS.init input callback
 // drains one byte at a time. Returning null from the callback means EOF —
 // a script that does `gets stdin` with an empty queue gets EOF immediately.
 
@@ -98,7 +102,7 @@ var _registerJsFn      = null;
 var _revokeJsFn        = null;
 
 // name -> Emscripten function-table index, used so revoke() can free the
-// slot via removeFunction. The same map drives _Result.js.names() so we
+// slot via removeFunction. The same map drives Runtime.js.names() so we
 // don't have to round-trip into Tcl for introspection.
 var _jsTableMap = Object.create(null);
 
@@ -203,7 +207,7 @@ Module['postRun'] = function () {
   _revokeJsFn        = Module.cwrap('SurfTcl_RevokeJsFn',               'number', ['string']);
   _Interp = _getInterp();
 
-  Result = {
+  Runtime = {
     Module: Module,
 
     set stdout(fn) { _stdoutSink = fn; },
@@ -251,7 +255,20 @@ Module['postRun'] = function () {
       },
       names: function () {
         return Object.keys(_jsTableMap);
-      }
+      },
+    },
+
+    // Grants eval() privileges to the interpreter.
+    // Intentionally scoped to this module, such that `surftcl` is bound to
+    // the runtime after initialisation.
+    GrantEval: function () {
+      let surftcl = this;
+      this.js.register("eval", function (args) {
+        let r = eval(args[0]);
+        if (r === undefined) return "";
+        if (typeof r === "object") return JSON.stringify(r);
+        return String(r);
+      });
     },
 
     // The thinnest sensible wrapper around Tcl_EvalEx: pass the script,
@@ -339,11 +356,5 @@ export async function onReady(func) {
   await createSurfTcl(Module);
 
   // setting global here for backwards compat with packages. reconsider later
-  Object.defineProperty(globalThis, "surftcl", {
-    value: Result,
-    writable: false,
-    configurable: false,
-    enumerable: true
-  });
-  func(Result);
+  func(Runtime);
 }

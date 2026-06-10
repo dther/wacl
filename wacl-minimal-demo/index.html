@@ -270,12 +270,7 @@ import * as surftcl from "./surftcl-bootstrap.mjs"
     interp.js.register("alert", function (args) {
       window.alert(args.join(" "));
     });
-    interp.js.register("eval", function (args) {
-      var r = (0, eval)(args[0]);
-      if (r === undefined) return "";
-      if (typeof r === "object") return JSON.stringify(r);
-      return String(r);
-    });
+    interp.GrantEval();
 
     // Make `update` the yield-to-the-substrate primitive: run Tcl's own
     // queue, then hand the JS event loop a turn (::surftcl::js::yield, backed
