@@ -53,9 +53,9 @@ SURFTCLCC = \
     -I tcl/unix -I tcl/generic -I tcl/libtommath -I opt $(BCFLAGS) \
     -DSTATIC_BUILD=1 -DBUILD_tcl -DTCL_THREADS=0
 
-.PHONY: surftcl-demo packages test test-async clean distclean fullclean
+.PHONY: minimal surftcl-demo packages test test-async clean distclean fullclean
 
-default: wacl-minimal.wasm
+default: minimal
 
 # The package pipeline lives in ext/. The headless suite loads packages
 # from the zips it produces, and reads the wasm the same build emits into
@@ -124,6 +124,8 @@ wacl-minimal.js: surftcl.o surftclAppInit.o surftclNotifier.o tcl/unix/libtcl9.0
 	ln -sf wacl-minimal.wasm wacl-minimal-demo/wacl.wasm
 
 wacl-minimal.wasm: wacl-minimal.js
+
+minimal: wacl-minimal.js wacl-minimal.wasm
 
 # Generate the surftcl-demo repo (the GitHub Pages site) from this tree: the
 # demo pages, the freshly built wasm, and the package and test files the pages
