@@ -59,25 +59,7 @@
 
 <div class="term" id="term"></div>
 
-<!--
-  wacl-minimal.js is the Emscripten build artifact. It defines itself as the
-  named AMD module "tcl/wacl" and uses require.toUrl("tcl/") to locate its
-  wasm payload, which it expects to find as "wacl.wasm" at that path.
-
-  Rather than pull in RequireJS, we provide just enough of the AMD surface
-  to satisfy it. The wasm file is reached via a wacl.wasm symlink pointing
-  at wacl-minimal.wasm in this directory.
--->
-<script>
-  const __modules = {};
-  function define(name, factory) { __modules[name] = factory(); }
-  define.amd = {};
-  function require(deps, cb) { cb.apply(null, deps.map(d => __modules[d])); }
-  require.toUrl = function (p) { return p === "tcl/" ? "" : p; };
-</script>
-<script src="wacl-minimal.js"></script>
-
-<script>
+<script type="module">
 "use strict";
 
 // A tiny channel between a DOM-based terminal surface and anything that wants
@@ -245,7 +227,7 @@ function SurfTclTerminal({ mount, prompt = "% ", onLine = () => {} }) {
 }
 
 // Boot: wire the terminal to the Tcl interpreter once the wasm is ready.
-require(["tcl/wacl"], function (surftcl) {
+import * as surftcl from "./surftcl-bootstrap.mjs"
   surftcl.onReady(function (interp) {
     const term = SurfTclTerminal({
       mount: document.getElementById("term"),
@@ -362,7 +344,6 @@ require(["tcl/wacl"], function (surftcl) {
     //   surftcl.Eval("::surftcl::js::call ping one two three")
     //   surftcl.supportURL = "https://example.com/report"  // try an error
   });
-});
 </script>
 
 </body>

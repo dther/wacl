@@ -30,7 +30,10 @@ BCFLAGS ?= -Oz -s WASM=1
 DEMOREPO ?= ../surftcl-demo
 
 WASMFLAGS_MINIMAL = \
-    --pre-js js/preJsRequire.js --post-js js/postJsRequire.js $(BCFLAGS) \
+    $(BCFLAGS) \
+    -s MODULARIZE \
+    -s EXPORT_ES6 \
+    -s EXPORT_NAME=createSurfTcl \
     -s FORCE_FILESYSTEM=1 \
     -s ALLOW_TABLE_GROWTH=1 \
     -s EXPORTED_RUNTIME_METHODS=cwrap,ccall,FS,addFunction,removeFunction,getValue,UTF8ToString \
@@ -116,16 +119,15 @@ surftclAppInit.o: opt/surftclAppInit.c
 surftclNotifier.o: opt/surftclNotifier.c
 	emcc $(SURFTCLCC) -DSURFTCL_ASYNCIFY -c $^ -o $@
 
-wacl-minimal.js: surftcl.o surftclAppInit.o surftclNotifier.o tcl/unix/libtcl9.0.a
+surftcl.mjs: surftcl.o surftclAppInit.o surftclNotifier.o tcl/unix/libtcl9.0.a
 	emcc $(WASMFLAGS_MINIMAL) $(SURFTCLEXPORTS) \
 	    -sASYNCIFY -sASYNCIFY_STACK_SIZE=1048576 \
 	    $^ -o $@
-	cp wacl-minimal.js wacl-minimal.wasm wacl-minimal-demo/
-	ln -sf wacl-minimal.wasm wacl-minimal-demo/wacl.wasm
 
-wacl-minimal.wasm: wacl-minimal.js
+surftcl.wasm: surftcl.mjs
 
-minimal: wacl-minimal.js wacl-minimal.wasm
+minimal: surftcl.mjs surftcl.wasm js/surftcl-bootstrap.mjs
+	cp $^ wacl-minimal-demo/
 
 # Generate the surftcl-demo repo (the GitHub Pages site) from this tree: the
 # demo pages, the freshly built wasm, and the package and test files the pages
