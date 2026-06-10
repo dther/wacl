@@ -53,9 +53,9 @@ SURFTCLCC = \
     -I tcl/unix -I tcl/generic -I tcl/libtommath -I opt $(BCFLAGS) \
     -DSTATIC_BUILD=1 -DBUILD_tcl -DTCL_THREADS=0
 
-.PHONY: minimal surftcl-demo packages test test-async clean distclean fullclean
+.PHONY: surftcl-demo packages test test-async clean distclean fullclean
 
-default: minimal
+default: wacl-minimal.wasm
 
 # The package pipeline lives in ext/. The headless suite loads packages
 # from the zips it produces, and reads the wasm the same build emits into
@@ -107,16 +107,23 @@ tcl/unix/libtcl9.0.a: tcl/unix/Makefile
 # because Tcl's function pointers defeat call-graph scoping. JSPI is the
 # lighter successor once it's cross-browser — the C and the `update` wrapper
 # are mechanism-agnostic, so that swap is localized.
-minimal: tcl/unix/libtcl9.0.a
-	emcc -c $(SURFTCLCC) -DSURFTCL_ASYNCIFY opt/surftcl.c -o surftcl.o
-	emcc -c $(SURFTCLCC) -DSURFTCL_ASYNCIFY opt/surftclNotifier.c -o surftclNotifier.o
-	emcc -c $(SURFTCLCC) opt/surftclAppInit.c -o surftclAppInit.o
+surftcl.o: opt/surftcl.c
+	emcc $(SURFTCLCC) -DSURFTCL_ASYNCIFY -c $^ -o $@
+
+surftclAppInit.o: opt/surftclAppInit.c
+	emcc $(SURFTCLCC) -DSURFTCL_ASYNCIFY -c $^ -o $@
+
+surftclNotifier.o: opt/surftclNotifier.c
+	emcc $(SURFTCLCC) -DSURFTCL_ASYNCIFY -c $^ -o $@
+
+wacl-minimal.js: surftcl.o surftclAppInit.o surftclNotifier.o tcl/unix/libtcl9.0.a
 	emcc $(WASMFLAGS_MINIMAL) $(SURFTCLEXPORTS) \
 	    -sASYNCIFY -sASYNCIFY_STACK_SIZE=1048576 \
-	    surftcl.o surftclNotifier.o surftclAppInit.o tcl/unix/libtcl9.0.a \
-	    -o wacl-minimal.js
+	    $^ -o $@
 	cp wacl-minimal.js wacl-minimal.wasm wacl-minimal-demo/
 	ln -sf wacl-minimal.wasm wacl-minimal-demo/wacl.wasm
+
+wacl-minimal.wasm: wacl-minimal.js
 
 # Generate the surftcl-demo repo (the GitHub Pages site) from this tree: the
 # demo pages, the freshly built wasm, and the package and test files the pages
@@ -124,7 +131,7 @@ minimal: tcl/unix/libtcl9.0.a
 # resolve unchanged; a root index.html redirects to wacl-minimal-demo/. The
 # repo is a rebuilt artifact — regenerate and commit it on every change,
 # keeping the wasm out of source-tree history. DEMOREPO is the demo checkout.
-surftcl-demo: minimal
+surftcl-demo: wacl-minimal.wasm
 	mkdir -p $(DEMOREPO)/wacl-minimal-demo/playground \
 	         $(DEMOREPO)/wacl-minimal-demo/tests $(DEMOREPO)/tests
 	cp wacl-minimal-demo/index.html            $(DEMOREPO)/wacl-minimal-demo/
