@@ -30,7 +30,7 @@ BCFLAGS ?= -Oz -s WASM=1
 DEMOREPO ?= ../surftcl-demo
 
 WASMFLAGS_MINIMAL = \
-    --pre-js preGeneratedJs.js --post-js js/postJsRequire.js $(BCFLAGS) \
+    --pre-js js/preJsRequire.js --post-js js/postJsRequire.js $(BCFLAGS) \
     -s FORCE_FILESYSTEM=1 \
     -s ALLOW_TABLE_GROWTH=1 \
     -s EXPORTED_RUNTIME_METHODS=cwrap,ccall,FS,addFunction,removeFunction,getValue,UTF8ToString \
@@ -111,7 +111,6 @@ minimal: tcl/unix/libtcl9.0.a
 	emcc -c $(SURFTCLCC) -DSURFTCL_ASYNCIFY opt/surftcl.c -o surftcl.o
 	emcc -c $(SURFTCLCC) -DSURFTCL_ASYNCIFY opt/surftclNotifier.c -o surftclNotifier.o
 	emcc -c $(SURFTCLCC) opt/surftclAppInit.c -o surftclAppInit.o
-	cp js/preJsRequire.js preGeneratedJs.js
 	emcc $(WASMFLAGS_MINIMAL) $(SURFTCLEXPORTS) \
 	    -sASYNCIFY -sASYNCIFY_STACK_SIZE=1048576 \
 	    surftcl.o surftclNotifier.o surftclAppInit.o tcl/unix/libtcl9.0.a \
@@ -150,7 +149,7 @@ surftcl-demo: minimal
 	    '</html>' > $(DEMOREPO)/index.html
 
 clean:
-	rm -f *.o wacl-minimal.js wacl-minimal.wasm preGeneratedJs.js
+	rm -f *.o wacl-minimal.js wacl-minimal.wasm
 	if [ -e tcl/unix/Makefile ] ; then cd tcl/unix && make clean ; fi
 
 # We don't ever change the Tcl source tarball directly,
