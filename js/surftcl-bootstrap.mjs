@@ -6,21 +6,53 @@
 
 import createSurfTcl from "./surftcl.mjs"
 
-var Module = {}
+// this gets passed to the factory on ready
+let Module = {}
 
-var _Interp = null;
-var _getInterp = null;
-var _eval = null;
-var _getStringResult = null;
-var Runtime = null;
+// Annoyingly, throwing a raw Object arguably has a better UX than Error in Chromium.
+class TclException extends Error {
+  constructor (errorCode, errorMessage, errorInfo) {
+    let message = `SurfTcl.TclException: ${errorCode}\n${errorInfo || errorMessage}`
+    super(message);
 
-var _TclException = function (errCode, errMessage, errInfo) {
-  this.errorCode = errCode;        // numeric: TCL_ERROR etc.
-  this.errorMessage = errMessage;  // immediate message from the interp
-  this.errorInfo = errInfo || errMessage;  // full ::errorInfo trace
-  this.toString = function () {
-    return 'TclException: ' + this.errorMessage;
+    // for catchers expecting a Tcl error
+    this.errorCode = errorCode; // Tcl list of error codes, e.g., {POSIX NOENT}
+    this.errorMessage = errorMessage;  // immediate message from the interp
+    this.errorInfo = errorInfo || errorMessage;  // full ::errorInfo trace
   };
+};
+
+// TODO(dther) A script should block on `gets stdin` and yield to the browser,
+// unless they've configured it to be non-blocking.
+// This needs to be configured via surftclNotifier.c.
+// Blocking reads should stop the event queue from being serviced, but not stop events from being queued.
+let decoder = new TextDecoder();
+let encoder = new TextEncoder();
+
+// Stdin queue. Runtime.pushStdin(text) appends; the FS.init input callback
+// drains one byte at a time. Returning null from the callback means EOF —
+// a script that does `gets stdin` with an empty queue gets EOF immediately.
+const stdin = {
+  queue: [],
+  eof: false,
+
+  write(text) {
+    // this is to be used by external code.
+    if (this.eof) throw Error("can't write to stdin after close");
+    const bytes = encoder.encode(text);
+    for (const b of bytes) this.queue.push(b);
+  },
+
+  close() {
+    // closing prevents future writes, but all enqueued bytes are guaranteed to go through
+    this.eof = true
+  },
+
+  _read_callback() {
+    // this is to be passed to the Emscripten module
+    if (this.queue.length === 0) return null;
+    return this.queue.shift()
+  },
 };
 
 // I/O sinks. Defaults route to the JS console — the first place a developer
@@ -28,41 +60,45 @@ var _TclException = function (errCode, errMessage, errInfo) {
 // Runtime.stderr = fn after onReady. We hand the sink the bytes Tcl emitted
 // as text, *including* any trailing newline — same byte stream xterm.js or
 // a remote shell would see.
-var _stdoutSink = function (text) { console.log(text); };
-var _stderrSink = function (text) { console.error(text); };
-
-// Stdin queue. Runtime.pushStdin(text) appends; the FS.init input callback
-// drains one byte at a time. Returning null from the callback means EOF —
-// a script that does `gets stdin` with an empty queue gets EOF immediately.
-
-// TODO(dther) A script should block on `gets stdin` and yield to the browser,
-// unless they've configured it to be non-blocking.
-// This needs to be configured via surftclNotifier.c.
-// Should a blocking read be a yield that also disables event processing?
-var _stdinQueue = [];
-var _stdinEof = false;
 
 // Output is delivered to FS.init per byte (or null for flush). We
 // accumulate per stream until a newline or flush, then hand a decoded
 // string to the sink.
-var _outBuf = [];
-var _errBuf = [];
-var _decoder = (typeof TextDecoder !== 'undefined') ? new TextDecoder() : null;
+const stdout = {
+  // TODO(dther) is there a way to find out EOF on stdout or stderr?
+  buffer: [],
+  flush() {
+    if (this.buffer.length === 0) return;
+    // FIXME(dther) is this seriously the right way to do it? **AND WHY DOESN'T IT EMIT AN ERROR BY DEFAULT??!**
+    let text = decoder.decode(new Uint8Array(this.buffer));
+    this.buffer.length = 0;
+    this.sink(text);
+  },
+  _write_callback(byte) {
+    if (byte === null) this.flush();
+    this.buffer.push(byte);
+    // TODO(dther) we shouldn't assume line buffering
+    if (byte == 10 /* \n */) this.flush();
+  },
+  sink: (text) => console.log('SurfTcl stdout: ' + text),
+};
 
-function _flushBuf(buf, sink) {
-  if (buf.length === 0) return;
-  var text = _decoder
-      ? _decoder.decode(new Uint8Array(buf))
-      : String.fromCharCode.apply(null, buf);
-  buf.length = 0;
-  sink(text);
-}
-
-function _emit(buf, sink, byte) {
-  if (byte === null) { _flushBuf(buf, sink); return; }
-  buf.push(byte);
-  if (byte === 10 /* \n */) _flushBuf(buf, sink);
-}
+const stderr = {
+  buffer: [],
+  flush() {
+    if (this.buffer.length === 0) return;
+    let text = decoder.decode(new Uint8Array(this.buffer));
+    this.buffer.length = 0;
+    this.sink(text);
+  },
+  _write_callback(byte) {
+    if (byte === null) this.flush();
+    this.buffer.push(byte);
+    // TODO(dther) we shouldn't assume line buffering
+    if (byte == 10 /* \n */) this.flush();
+  },
+  sink: (text) => console.log('SurfTcl stderr: ' + text),
+};
 
 // ---- JS function registry ------------------------------------------------
 //
@@ -96,10 +132,10 @@ function _emit(buf, sink, byte) {
 // the caller to serialize — JSON is the obvious default and is in the
 // ecosystem already. The bridge moves strings.
 
-var _setJsResult       = null;  // wired in postRun
-var _appendErrorCodeEl = null;
-var _registerJsFn      = null;
-var _revokeJsFn        = null;
+let _setJsResult       = null;  // wired in postRun
+let _appendErrorCodeEl = null;
+let _registerJsFn      = null;
+let _revokeJsFn        = null;
 
 // name -> Emscripten function-table index, used so revoke() can free the
 // slot via removeFunction. The same map drives Runtime.js.names() so we
@@ -182,21 +218,21 @@ Module['noInitialRun'] = false;
 Module['noExitRuntime'] = true;
 
 // FS.init must be wired in preRun so /dev/stdin, /dev/stdout, /dev/stderr
-// are devices backed by our callbacks before main() runs and Tcl opens
-// them. Doing this here bypasses the older Module.print/printErr hooks,
-// which Emscripten's runtime caches once during run() and which were the
-// source of every "puts isn't reaching my callback" bug in this project.
+// are devices backed by callbacks before main() runs and Tcl opens them.
 Module['preRun'] = function () {
   Module.FS.init(
-    function () {
-      if (_stdinEof || _stdinQueue.length === 0) return null;
-      return _stdinQueue.shift();
-    },
-    function (b) { _emit(_outBuf, _stdoutSink, b); },
-    function (b) { _emit(_errBuf, _stderrSink, b); }
+    // bind is necessary because of how the "this" keyword works
+    stdin._read_callback.bind(stdin),
+    stdout._write_callback.bind(stdout),
+    stderr._write_callback.bind(stderr)
   );
 };
 
+let _Interp = null;
+let _getInterp = null;
+let _eval = null;
+let _getStringResult = null;
+let Runtime = null;
 Module['postRun'] = function () {
   _getInterp         = Module.cwrap('SurfTcl_GetInterp',                'number', []);
   _eval              = Module.cwrap('SurfTcl_Eval',                     'number', ['number', 'string']);
@@ -210,22 +246,11 @@ Module['postRun'] = function () {
   Runtime = {
     Module: Module,
 
-    set stdout(fn) { _stdoutSink = fn; },
-    set stderr(fn) { _stderrSink = fn; },
+    set stdout(fn) { stdout.sink = fn; },
+    set stderr(fn) { stderr.sink = fn; },
 
-    pushStdin: function (text) {
-      if (_stdinEof) return;
-      var bytes = (typeof TextEncoder !== 'undefined')
-          ? new TextEncoder().encode(text)
-          : (function () {
-              var out = new Uint8Array(text.length);
-              for (var j = 0; j < text.length; j++) out[j] = text.charCodeAt(j) & 0xff;
-              return out;
-            })();
-      for (var i = 0; i < bytes.length; i++) _stdinQueue.push(bytes[i]);
-    },
-
-    closeStdin: function () { _stdinEof = true; },
+    pushStdin: stdin.write.bind(stdin),
+    closeStdin: stdin.close.bind(stdin),
 
     get interp() { return _Interp; },
 
@@ -234,7 +259,7 @@ Module['postRun'] = function () {
     // safe to call for names that aren't registered. names() returns the
     // currently-granted names as a JS array.
     js: {
-      register: function (name, fn) {
+      register(name, fn) {
         if (typeof name !== 'string')   throw new TypeError('register: name must be a string');
         if (typeof fn   !== 'function') throw new TypeError('register: fn must be a function');
         if (_jsTableMap[name] !== undefined) {
@@ -258,10 +283,10 @@ Module['postRun'] = function () {
       },
     },
 
-    // Grants eval() privileges to the interpreter.
+    // Grants `surftk::js::call eval` privileges to the interpreter.
     // Intentionally scoped to this module, such that `surftcl` is bound to
     // the runtime after initialisation.
-    GrantEval: function () {
+    GrantEval() {
       let surftcl = this;
       this.js.register("eval", function (args) {
         let r = eval(args[0]);
@@ -271,20 +296,26 @@ Module['postRun'] = function () {
       });
     },
 
-    // The thinnest sensible wrapper around Tcl_EvalEx: pass the script,
-    // get rc + result. On error, fetch ::errorInfo for the trace before
-    // throwing, since asking for it later would mean re-running Tcl when
-    // the page just wants to print what went wrong.
-    Eval: function (script) {
-      var rc = _eval(this.interp, script);
-      if (rc !== 0) {
-        var msg = _getStringResult(this.interp);
-        _eval(this.interp, 'set ::errorInfo');
-        var trace = _getStringResult(this.interp);
-        throw new _TclException(rc, msg, trace);
-      }
-      return _getStringResult(this.interp);
+    RevokeEval() { this.js.revoke("eval") },
+    RevokeEvalPermanently() {
+      this.GrantEval = () => {
+        throw new Error("Can't re-grant eval after SurfTcl.RevokeEvalPermanently()");
+      };
+      this.RevokeEval();
     },
+
+    Eval: TclEval,
+
+    // TODO(dther) EvalAsync needs re-considering.
+    // Namely, *it is basically never a good idea to call it directly.*
+    // Yielding logic is incredibly complex at the moment. I don't know how to explain it.
+    // I think I need to rework the entire Notifier...
+    // Should be...
+    // - renamed to something else (ServiceEvents()?)
+    // - have an obvious one-function way to set it up
+    //   (the demos manually patch it in every time)
+    // - generally not something the user cares about at all, because we handle the event loop
+    //   in most cases
 
     // Async sibling of Eval — the top-level entry for scripts that may
     // YIELD (`::surftcl::js::yield`, or the `update` wrapper). Returns a
@@ -296,7 +327,7 @@ Module['postRun'] = function () {
     // are known not to yield (the JS bridge re-enters that way, and a
     // synchronous ccall can't survive an unwind). Error handling
     // mirrors Eval; the ::errorInfo fetch is itself a non-yielding eval.
-    EvalAsync: function (script) {
+    EvalAsync(script) {
       var interp = this.interp;
       return Promise.resolve(
         Module.ccall('SurfTcl_Eval', 'number', ['number', 'string'],
@@ -306,7 +337,7 @@ Module['postRun'] = function () {
           var msg = _getStringResult(interp);
           _eval(interp, 'set ::errorInfo');
           var trace = _getStringResult(interp);
-          throw new _TclException(rc, msg, trace);
+          throw new TclException(rc, msg, trace);
         }
         return _getStringResult(interp);
       });
@@ -333,9 +364,9 @@ Module['postRun'] = function () {
     // is calibrated to make either choice obvious.
     supportURL: null,
 
-    onError: function (context, error) {
+    onError(context, error) {
       var msg = "[" + context + "] " + ((error && error.message) || String(error));
-      _stderrSink("surftcl error: " + msg + "\n");
+      stderr.sink("surftcl error: " + msg + "\n");
       if (typeof alert === "function") {
         if (this.supportURL) {
           alert("A fatal surftcl error has occurred.\n\n" +
@@ -351,10 +382,25 @@ Module['postRun'] = function () {
   };
 }
 
+// The thinnest sensible wrapper around Tcl_EvalEx: pass the script,
+// get rc + result. On error, fetch ::errorInfo for the trace before
+// throwing, since asking for it later would mean re-running Tcl when
+// the page just wants to print what went wrong.
+function TclEval(script) {
+  let rc = _eval(_Interp, script);
+  if (rc !== 0) {
+    let msg = _getStringResult(_Interp);
+    _eval(_Interp, 'set ::errorInfo');
+    let trace = _getStringResult(_Interp);
+    _eval(_Interp, 'set ::errorCode');
+    let code = _getStringResult(_Interp);
+    throw new TclException(code, msg, trace);
+  }
+  return _getStringResult(_Interp);
+}
+
 // this should work, right??
 export async function onReady(func) {
   await createSurfTcl(Module);
-
-  // setting global here for backwards compat with packages. reconsider later
   func(Runtime);
 }
