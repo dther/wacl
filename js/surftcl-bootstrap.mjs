@@ -6,9 +6,6 @@
 
 import createSurfTcl from "./surftcl.mjs"
 
-// this gets passed to the factory on ready
-let Module = {}
-
 // Annoyingly, throwing a raw Object arguably has a better UX than Error in Chromium.
 class TclException extends Error {
   constructor (errorCode, errorMessage, errorInfo) {
@@ -68,8 +65,8 @@ const stdout = {
   // TODO(dther) is there a way to find out EOF on stdout or stderr?
   buffer: [],
   flush() {
+    // FIXME(dther) WHY ARE ERRORS HERE SILENT?!
     if (this.buffer.length === 0) return;
-    // FIXME(dther) is this seriously the right way to do it? **AND WHY DOESN'T IT EMIT AN ERROR BY DEFAULT??!**
     let text = decoder.decode(new Uint8Array(this.buffer));
     this.buffer.length = 0;
     this.sink(text);
@@ -99,6 +96,23 @@ const stderr = {
   },
   sink: (text) => console.log('SurfTcl stderr: ' + text),
 };
+
+
+// Module gets passed to the factory on ready
+let Module = {
+  noInitialRun: false,
+  noExitRuntime: true,
+  preRun: () => {
+    // FS.init must be wired in preRun so /dev/stdin, /dev/stdout, /dev/stderr
+    // are devices backed by callbacks before main() runs and Tcl opens them.
+    Module.FS.init(
+      // bind is necessary because of how the "this" keyword works
+      stdin._read_callback.bind(stdin),
+      stdout._write_callback.bind(stdout),
+      stderr._write_callback.bind(stderr)
+    );
+  },
+}
 
 // ---- JS function registry ------------------------------------------------
 //
@@ -132,16 +146,13 @@ const stderr = {
 // the caller to serialize — JSON is the obvious default and is in the
 // ecosystem already. The bridge moves strings.
 
-let _setJsResult       = null;  // wired in postRun
-let _appendErrorCodeEl = null;
-let _registerJsFn      = null;
-let _revokeJsFn        = null;
-
 // name -> Emscripten function-table index, used so revoke() can free the
 // slot via removeFunction. The same map drives Runtime.js.names() so we
 // don't have to round-trip into Tcl for introspection.
 var _jsTableMap = Object.create(null);
 
+// TODO(dther) Tcl return codes deserve a function for translating them
+// FIXME(dther) this is all fine logically, but uses old JS features that emit silent errors.
 function _normalizeJsResult(raw) {
   if (raw === undefined || raw === null) {
     return { code: 0, value: '', errorCode: null };
@@ -214,25 +225,16 @@ function _makeJsShim(userFn) {
 
 // -------------------------------------------------------------------------
 
-Module['noInitialRun'] = false;
-Module['noExitRuntime'] = true;
-
-// FS.init must be wired in preRun so /dev/stdin, /dev/stdout, /dev/stderr
-// are devices backed by callbacks before main() runs and Tcl opens them.
-Module['preRun'] = function () {
-  Module.FS.init(
-    // bind is necessary because of how the "this" keyword works
-    stdin._read_callback.bind(stdin),
-    stdout._write_callback.bind(stdout),
-    stderr._write_callback.bind(stderr)
-  );
-};
-
+let _setJsResult       = null; 
+let _appendErrorCodeEl = null;
+let _registerJsFn      = null;
+let _revokeJsFn        = null;
 let _Interp = null;
 let _getInterp = null;
 let _eval = null;
 let _getStringResult = null;
 let Runtime = null;
+
 Module['postRun'] = function () {
   _getInterp         = Module.cwrap('SurfTcl_GetInterp',                'number', []);
   _eval              = Module.cwrap('SurfTcl_Eval',                     'number', ['number', 'string']);
@@ -401,6 +403,7 @@ function TclEval(script) {
 
 // this should work, right??
 export async function onReady(func) {
-  await createSurfTcl(Module);
+  let m = await createSurfTcl(Module);
+  console.log(m);
   func(Runtime);
 }

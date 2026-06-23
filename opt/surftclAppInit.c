@@ -11,6 +11,7 @@ static Tcl_Interp* mainInterp = NULL;
 static int
 SurfTcl_AppInit(Tcl_Interp* interp)
 {
+    // TODO(dther) I should merge these files. This literally will not work without the notifier.
     if (SurfTcl_Init(interp) != TCL_OK)
         printf("Error while initializing SurfTcl! Package will not be present");
     return 0;
@@ -22,24 +23,9 @@ SurfTcl_GetInterp()
     return mainInterp;
 }
 
-static void
-SurfTclMainLoop()
-{
-    // TODO(dther) refactor this to flush the entire event queue.
-    // It should be highly unlikely that Tcl events block the browser-
-    // if they do, that's a signal that our event semantics are wrong.
-    Tcl_DoOneEvent(TCL_DONT_WAIT|TCL_ALL_EVENTS);
-}
-
 int
 main(int argc, char** argv)
 {
-    /*
-     * Swap in the non-blocking main-thread notifier before anything touches
-     * the notifier (it initialises lazily on first use). From here on Tcl
-     * never blocks waiting for an event; the JS side drives servicing via
-     * SurfTcl_ServiceEvents. See opt/waclNotifier.c.
-     */
     SurfTcl_InstallNotifier();
 
     mainInterp = Tcl_CreateInterp();
@@ -68,7 +54,6 @@ main(int argc, char** argv)
         printf("Error while calling Tcl_Init: %s", errInfo);
     }
 
-    SurfTcl_AppInit(mainInterp);
 
     // TODO(dther) we want to load `main.tcl` if it's present inside the zipfs
     // after *all initialisation* is done. Reason being:
@@ -86,8 +71,19 @@ main(int argc, char** argv)
     // to be the idiomatic way to package applications for it,
     // so it saves shimming to follow the same behaviour.
 
-    emscripten_set_main_loop(SurfTclMainLoop, 0, 0);
-
-    return 0;
+    // Finally, enter the event loop.
+    //Tcl_MainEx(argc, argv, SurfTcl_AppInit, mainInterp);
+    // ... Okay, problem. The above runs. *HOWEVER,* it exits immediately instead of entering the event loop.
+    // I don't precisely know why, but the stack trace says that it gets as far as calling `Tcl_EvalObjEx("exit %d"...)`,
+    // and does so with "0", meaning that it wasn't due to an error.
+    // The most likely explanation is that it called `goto done`, likely because it fell out of the loop because it looked like stdin was EOF.
+    // I've confirmed(?) this by pre-seeding stdin with a command to print to stdout, and it did so, then immediately exited.
+    // We should probably roll the main loop ourselves. The question is... How?
+    SurfTcl_AppInit(mainInterp);
+    while (1) { Tcl_DoOneEvent(TCL_ALL_EVENTS); };
+    // the above successfully suspends!!! Mind you, it doesn't read commands from stdin like it should, but it *works!*
+    // I tested it in the JS command line via `__interp.Eval("after 1000 {puts hi}"); __interp.Module.__surftcl_wake()`.
+    // TODO(dther) write a Tcl_Channel implementation because wrangling Tcl_Main and Emscripten's Unixy assumptions is rapidly diminishing returns
+    // when neither teletypes, sockets, nor file descriptors "actually" exist inside a browser.
+    // they can all just be Tcl_Channels with a flag in the JS somewhere, mayn
 }
-

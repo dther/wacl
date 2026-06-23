@@ -17,19 +17,10 @@ void SurfTcl_SetJsResultString(const char *s);
 void SurfTcl_AppendJsErrorCodeElement(const char *s);
 
 /*
- * Main-thread event-loop integration (opt/surftclNotifier.c). SurfTcl_InstallNotifier
- * swaps in a non-blocking notifier and must run before the notifier is first
- * used (call it at the top of main). SurfTcl_ServiceEvents is the JS-driven pump:
- * it drains all ready events without blocking and returns the count.
+ * Main-thread event-loop integration (opt/surftclNotifier.c).
+ * TODO(dther) explain better
  */
+extern int surftclEval;
 void SurfTcl_InstallNotifier(void);
-int  SurfTcl_ServiceEvents(void);
-
-/*
- * Tcl-side `await`: yield to the JS event loop and resume in place. Backs
- * `::surftcl::js::yield` (and the Tcl `update` wrapper). Needs an Asyncify
- * build; see opt/surftclNotifier.c and docs/event-loop.md.
- */
-int  SurfTcl_Yield(Tcl_Interp *interp);
 
 #endif /* _SURFTCL_H_ */

@@ -43,7 +43,7 @@ static Tcl_Obj *surftclJsResultValue     = NULL;  /* owned ref, or NULL */
 static Tcl_Obj *surftclJsResultErrorCode = NULL;  /* owned ref, or NULL */
 
 static void
-surftcl_JsResetResult(void)
+SurfTclJsResetResult(void)
 {
     if (surftclJsResultValue != NULL) {
         Tcl_DecrRefCount(surftclJsResultValue);
@@ -120,7 +120,7 @@ surftcl_JsCallCmd(ClientData clientData, Tcl_Interp *interp,
         }
     }
 
-    surftcl_JsResetResult();
+    SurfTclJsResetResult();
     SurfTclJsFn fn = (SurfTclJsFn)(intptr_t) Tcl_GetHashValue(e);
     int rc = fn(argc, argv);
 
@@ -186,23 +186,6 @@ surftcl_JsRevokeCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_OK;
 }
 
-/* ::surftcl::js::yield — relinquish to the JS event loop and resume in place.
- * Thin Tcl front for SurfTcl_Yield (opt/surftclNotifier.c). The idiomatic caller
- * is the Tcl `update` wrapper, not this directly. */
-static int
-surftcl_JsYieldCmd(ClientData clientData, Tcl_Interp *interp,
-           int objc, Tcl_Obj *const objv[])
-{
-    if (objc != 1) {
-        Tcl_WrongNumArgs(interp, 1, objv, NULL);
-        return TCL_ERROR;
-    }
-    // TODO(dther) This should always succeed and preserve the stack.
-    // It currently does not. See surftclNotifier.c
-    return SurfTcl_Yield(interp);
-}
-
-
 /*
  * ::surftcl::dom attr|css selector key value
  *
@@ -264,7 +247,6 @@ SurfTcl_Init(Tcl_Interp *interp)
     Tcl_CreateObjCommand(interp, "::surftcl::js::call",   surftcl_JsCallCmd,   NULL, NULL);
     Tcl_CreateObjCommand(interp, "::surftcl::js::names",  surftcl_JsNamesCmd,  NULL, NULL);
     Tcl_CreateObjCommand(interp, "::surftcl::js::revoke", surftcl_JsRevokeCmd, NULL, NULL);
-    Tcl_CreateObjCommand(interp, "::surftcl::js::yield",  surftcl_JsYieldCmd,  NULL, NULL);
 
     Tcl_PkgProvide(interp, "surftcl", "1.0.0");
     return TCL_OK;
@@ -276,19 +258,10 @@ SurfTcl_Init(Tcl_Interp *interp)
  * former expands to Tcl_EvalEx, the latter to Tcl_GetString of the obj
  * result). The surftcl JS bridge cwraps these instead.
  *
- * SurfTcl_Eval is a thin wrapper — no re-entrancy fence. JS and Tcl share one
- * thread and cooperate on one event loop, so a JS callback invoked mid-Tcl
- * (via ::surftcl::js::call) may call straight back into SurfTcl_Eval. That is
- * fine: Tcl re-enters itself constantly — command substitution, `eval`,
- * `fileevent` callbacks — and is built for it. We deliberately do NOT
- * save/restore interpreter state around a nested call: a JS-side failure
- * that propagates should leave its errorInfo/errorCode intact, so the Tcl
- * side can `catch` it or let it bubble to the failure surface. Silent
- * isolation — papering over a nested error to keep frames "clean" — is the
- * one thing we reject. Runaway self-recursion is caught by Tcl's own
- * nesting limit ("too many nested evaluations (infinite loop?)"), a clean
- * Tcl error rather than a wasm stack overflow; we don't need our own wall.
+ * surftclEval is a global variable that tracks if a concurrent call has been made.
+ * A yield is __not possible__ when this is anything but 0.
  */
+int surftclEval = 0;
 int
 SurfTcl_Eval(Tcl_Interp *interp, const char *script)
 {
@@ -299,7 +272,13 @@ SurfTcl_Eval(Tcl_Interp *interp, const char *script)
      * where the current frame is the parked evaluation's — without this, a
      * re-entrant SurfTcl_Eval during a yield would inherit that proc's locals.
      */
-    return Tcl_EvalEx(interp, script, -1, TCL_EVAL_GLOBAL);
+    surftclEval++;
+    // TODO(dther) consider Tcl_SaveInterpState before this, then restore after.
+    // This way, a background error will dump the full call stack
+    // but the context that yielded for whatever reason still has a clean slate.
+    int r = Tcl_EvalEx(interp, script, -1, TCL_EVAL_GLOBAL);
+    surftclEval--;
+    return r;
 }
 
 
