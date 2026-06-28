@@ -4,9 +4,10 @@
 // I intend to rename these later, such that this file becomes "surftcl.mjs"
 // and there's more than one build. surftcl.mjs just selects based on configuration.
 
+// DEFER(cleanup) use tabs, with tabstop = 2, in this folder.
+
 import createSurfTcl from "./surftcl.mjs"
 
-// Annoyingly, throwing a raw Object arguably has a better UX than Error in Chromium.
 class TclException extends Error {
   constructor (errorCode, errorMessage, errorInfo) {
     let message = `SurfTcl.TclException: ${errorCode}\n${errorInfo || errorMessage}`
@@ -19,6 +20,131 @@ class TclException extends Error {
   };
 };
 
+// TODO(dther) I'm trying to figure out a good abstraction for "bridge channels".
+// Earlier prototypes used Emscripten FS API, but it makes assumptions
+// that break Tcl's model of how standard I/O on Unix-like systems (which Emscripten
+// emulates) is supposed to act.
+
+export class ByteFifo {
+  /* This is used primarily for inputProc, which needs buffering because
+   * the Tcl side is push-only.
+   */
+
+  /* DEFER(memory optimisation) This allocates and de-allocates very often.
+   * A ring buffer's more robust but needs a lot of logic I don't want to maintain right now.
+   */
+  constructor() { this.chunks = []; this.head = 0; this.bytes = 0; }
+  get length() { return this.bytes; }
+  /* XXX push takes ownership of u8. Changes to it will change the chunk in the queue! */
+  push(u8) { if (u8.length) { this.chunks.push(u8); this.bytes += u8.length; } }
+  take(dst, max) {                    // dst: a HEAPU8 subarray; returns bytes copied
+    let n = 0;
+    while (n < max && this.chunks.length) {
+      const c = this.chunks[0], avail = c.length - this.head;
+      const want = Math.min(avail, max - n);
+      dst.set(c.subarray(this.head, this.head + want), n);
+      this.head += want; n += want; this.bytes -= want;
+      if (this.head === c.length) { this.chunks.shift(); this.head = 0; }
+    }
+    return n;
+  }
+};
+
+/* SurfTcl Bridge Channels are bytestreams between the Tcl interpreter's runtime and the JS' runtime
+ * that are driven by a hand-rolled Tcl_ChannelType.
+ */
+class BridgeChannel {
+  // These are bidirectional by default.
+  // DEFER(channel modes) a mask argument that lets this be simplex
+
+  constructor (handle, tclChannelPtr, options = {}) {
+    this.handle = handle;
+    this._tclChannelPtr = tclChannelPtr; // XXX this is an opaque handle given by Tcl
+
+    this._outputSource = {
+      /* Tcl channels have an outputProc which pushes data according to
+       * Tcl's internal buffering strategy.
+       */
+      start: (controller) => {
+        this._outputSource.controller = controller;
+        // this.waitingPull = null; // Is this necessary?
+      },
+
+      pull: (c) => {
+        /*
+        this.waitingPull = new Promise((res, rej) => {
+            this.waitingPull = { resolve: res, reject: rej };
+        });
+        */
+        // XXX when does this get called???
+        Module.ccall('SurfTcl_NotifyBridgeWritable', null, ['number'], this._tclChannelPtr);
+      },
+
+      cancel: (reason) => {
+        // closes the read channel from Tcl's perspective
+        this._outputClosed = true;
+        //this.waitingPull?.reject(reason);
+        Module.ccall('SurfTcl_NotifyBridgeWritable', null, ['number'], this._tclChannelPtr);
+      },
+
+      push: (bytes) => {
+        // TODO(dther) this is how one enqueues, it's called by the Tcl side
+        this._outputSource.controller.enqueue(bytes);
+        //this.waitingPull?.resolve(); this.waitingPull = null;
+      },
+    };
+    this.output = new ReadableStream(this._outputSource,
+      new ByteLengthQueuingStrategy({ highWaterMark: 4096 }));
+    this._outputClosed = false;
+
+    // DEFER(bridge input) WritableStream is a good interface to have later on,
+    // but right now it's unnecessary. We have a FIFO we push through.
+    this._inputFifo = new ByteFifo();
+    this._inputClosed = false;
+  };
+
+  input = {
+    write: (bytes) => {
+      this._inputFifo.push(bytes);
+      Module.ccall('SurfTcl_NotifyBridgeReadable', null,
+        ['number'], this._tclChannelPtr);
+    },
+    close: () => {
+      this._inputClosed = true
+      Module.ccall('SurfTcl_NotifyBridgeReadable', null,
+        ['number'], this._tclChannelPtr);
+    },
+  }
+
+  _tcl = {
+    /* Tcl/C managed state. These are pseudo-syscalls and private buffers. */
+    closeInput: () => { this.input.close(); },
+    closeOutput: () => { this.output.cancel(); },
+
+    output: (buf, len) => {
+      // outputs len bytes to JS. So long as the channel isn't closed,
+      // this will always succeed and push max bytes.
+      console.log('gothere');
+      if (this._outputClosed) return -1 /* EPIPE */
+
+      // DEFER(memory optimisation) have buffer size limits,
+      // and emit EAGAIN to signal that the queue is full.
+      this._outputSource.push(Module.HEAPU8.slice(buf, len));
+      return len;
+    },
+
+    input: (dst, max) => {
+      // takes up to max bytes from the inputFifo
+      if (this._inputClosed && this._inputFifo.length === 0) return 0;
+      /* will be interpreted as EOF on the Tcl side which will handle its own cleanup */
+      if (this._inputFifo.length === 0) return -1; /* EAGAIN */
+      return this.inputFifo.take(dst, max);
+    },
+
+  };
+}
+
+// --------------------------------------------------------------------------
 // TODO(dther) A script should block on `gets stdin` and yield to the browser,
 // unless they've configured it to be non-blocking.
 // This needs to be configured via surftclNotifier.c.
@@ -62,7 +188,6 @@ const stdin = {
 // accumulate per stream until a newline or flush, then hand a decoded
 // string to the sink.
 const stdout = {
-  // TODO(dther) is there a way to find out EOF on stdout or stderr?
   buffer: [],
   flush() {
     // FIXME(dther) WHY ARE ERRORS HERE SILENT?!
@@ -74,7 +199,7 @@ const stdout = {
   _write_callback(byte) {
     if (byte === null) this.flush();
     this.buffer.push(byte);
-    // TODO(dther) we shouldn't assume line buffering
+    // DEFER(terminal) if we ever want a real stream/terminal we need unbuffered output
     if (byte == 10 /* \n */) this.flush();
   },
   sink: (text) => console.log('SurfTcl stdout: ' + text),
@@ -91,7 +216,7 @@ const stderr = {
   _write_callback(byte) {
     if (byte === null) this.flush();
     this.buffer.push(byte);
-    // TODO(dther) we shouldn't assume line buffering
+    // DEFER(terminal) if we ever want a real stream/terminal we need unbuffered output
     if (byte == 10 /* \n */) this.flush();
   },
   sink: (text) => console.log('SurfTcl stderr: ' + text),
@@ -99,7 +224,8 @@ const stderr = {
 
 
 // Module gets passed to the factory on ready
-let Module = {
+// XXX (dther) we use var here because BridgeChannel needs access to it.
+var Module = {
   noInitialRun: false,
   noExitRuntime: true,
   preRun: () => {
@@ -113,6 +239,13 @@ let Module = {
     );
   },
 }
+
+Module.bridgeChannels = new Map();
+Module._surftcl_new_bridge = function(handle, chan) {
+  let bridge = new BridgeChannel(handle, chan);
+  Module.bridgeChannels.set(handle, bridge);
+}
+
 
 // ---- JS function registry ------------------------------------------------
 //
@@ -225,6 +358,7 @@ function _makeJsShim(userFn) {
 
 // -------------------------------------------------------------------------
 
+// DEFER(cleanup) this can go inside Runtime, where I keep all the things that happen at Runtime
 let _setJsResult       = null; 
 let _appendErrorCodeEl = null;
 let _registerJsFn      = null;
@@ -233,6 +367,7 @@ let _Interp = null;
 let _getInterp = null;
 let _eval = null;
 let _getStringResult = null;
+
 let Runtime = null;
 
 Module['postRun'] = function () {
@@ -308,16 +443,7 @@ Module['postRun'] = function () {
 
     Eval: TclEval,
 
-    // TODO(dther) EvalAsync needs re-considering.
-    // Namely, *it is basically never a good idea to call it directly.*
-    // Yielding logic is incredibly complex at the moment. I don't know how to explain it.
-    // I think I need to rework the entire Notifier...
-    // Should be...
-    // - renamed to something else (ServiceEvents()?)
-    // - have an obvious one-function way to set it up
-    //   (the demos manually patch it in every time)
-    // - generally not something the user cares about at all, because we handle the event loop
-    //   in most cases
+    // FIXME(dther) remove EvalAsync entirely: main() owns the event loop and is the only stack that yields
 
     // Async sibling of Eval — the top-level entry for scripts that may
     // YIELD (`::surftcl::js::yield`, or the `update` wrapper). Returns a

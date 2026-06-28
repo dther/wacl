@@ -22,8 +22,9 @@ TCLVERSION ?= 9.0.3
 TCLSRC      = tcl$(TCLVERSION)-src.tar.gz
 TCLURL      = https://prdownloads.sourceforge.net/tcl/$(TCLSRC)
 
-BCFLAGS ?= -Oz -s WASM=1
+#BCFLAGS ?= -Oz -s WASM=1
 #BCFLAGS ?= -O0 -g4 -s WASM=1
+BCFLAGS ?= -Oz -gsource-map --minify 0 -s WASM=1
 
 # The generated GitHub Pages site lives in its own repo (dther/surftcl-demo),
 # rebuilt from this tree by `make surftcl-demo`. Default to a sibling checkout.
@@ -49,7 +50,8 @@ SURFTCLEXPORTS = \
         _SurfTcl_RevokeJsFn,\
         _SurfTcl_SetJsResultString,\
         _SurfTcl_AppendJsErrorCodeElement,\
-        _SurfTcl_ServiceEvents\
+        _SurfTcl_NotifyBridgeWritable,\
+        _SurfTcl_NotifyBridgeReadable\
     "
 
 SURFTCLCC = \

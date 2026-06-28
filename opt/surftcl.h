@@ -16,6 +16,10 @@ int  SurfTcl_Eval(Tcl_Interp *interp, const char *name);
 void SurfTcl_SetJsResultString(const char *s);
 void SurfTcl_AppendJsErrorCodeElement(const char *s);
 
+// FIXME testing
+void SurfTcl_NotifyBridgeReadable(Tcl_Channel chan);
+void SurfTcl_NotifyBridgeWritable(Tcl_Channel chan);
+
 /*
  * Main-thread event-loop integration (opt/surftclNotifier.c).
  * TODO(dther) explain better

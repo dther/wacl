@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <emscripten.h>
+#include <errno.h>
 
 #include "surftcl.h"
 
@@ -232,27 +233,6 @@ surftcl_DomCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *con
 }
 
 
-int
-SurfTcl_Init(Tcl_Interp *interp)
-{
-    if (!surftclJsRegistryInited) {
-        Tcl_InitHashTable(&surftclJsRegistry, TCL_STRING_KEYS);
-        surftclJsRegistryInited = 1;
-    }
-
-    Tcl_CreateNamespace(interp, "::surftcl",     NULL, NULL);
-    Tcl_CreateNamespace(interp, "::surftcl::js", NULL, NULL);
-
-    Tcl_CreateObjCommand(interp, "::surftcl::dom",        surftcl_DomCmd,      NULL, NULL);
-    Tcl_CreateObjCommand(interp, "::surftcl::js::call",   surftcl_JsCallCmd,   NULL, NULL);
-    Tcl_CreateObjCommand(interp, "::surftcl::js::names",  surftcl_JsNamesCmd,  NULL, NULL);
-    Tcl_CreateObjCommand(interp, "::surftcl::js::revoke", surftcl_JsRevokeCmd, NULL, NULL);
-
-    Tcl_PkgProvide(interp, "surftcl", "1.0.0");
-    return TCL_OK;
-}
-
-
 /*
  * Tcl 9 turned Tcl_Eval and Tcl_GetStringResult into header macros (the
  * former expands to Tcl_EvalEx, the latter to Tcl_GetString of the obj
@@ -286,4 +266,170 @@ const char *
 SurfTcl_GetStringResult(Tcl_Interp *interp)
 {
     return Tcl_GetString(Tcl_GetObjResult(interp));
+}
+
+// -------------------- Channel code, still testing.
+
+/* What do we want to keep track of, anyway?
+ * Maybe the JS side should be the source of truth.
+ */
+typedef struct BridgeState {
+    char handle[64];
+    Tcl_Channel channel;
+    int blocking;
+    int outputClosed;
+    int inputClosed;
+} BridgeState;
+
+int
+SurfTclBridgeInput(void *instanceData, char *buf, int bufSize, int *errorCodePtr)
+{
+    BridgeState *chan = (BridgeState *)instanceData;
+    int n = EM_ASM_INT({
+        Module.bridgeChannels.get(UTF8ToString($0))._tcl.input($1, $2)
+    }, &(chan->handle), buf, bufSize);
+
+    if (n == -1) *errorCodePtr = EAGAIN; /* JS has no data for us right now */
+    if (n ==  0) chan->inputClosed = 1; /* JS side is closed and won't reopen */
+    return n;
+}
+
+int
+SurfTclBridgeOutput(void *instanceData, const char *buf, int toWrite, int *errorCodePtr)
+{
+    BridgeState *chan = (BridgeState *)instanceData;
+    int n = EM_ASM_INT({
+        Module.bridgeChannels.get(UTF8ToString($0))._tcl.output($1, $2)
+    }, &(chan->handle), buf, toWrite);
+
+    if (n == -1) {
+        *errorCodePtr = EPIPE; /* other side no longer wants data */
+        chan->outputClosed = 1;
+    }
+    return n;
+}
+
+void
+SurfTclBridgeWatch(void *state, int mask)
+{
+    /* noop because we're always watching */
+    return;
+}
+
+int
+SurfTclBridgeClose2(void *state, Tcl_Interp *interp, int flags)
+{
+    // TODO(dther) implement half-closing logic...
+    // TODO(dther) this should delete it from the JS side too
+    return EINVAL;
+}
+
+int
+SurfTclBridgeBlockMode(void *state, int mode)
+{
+    // SurfTcl bridge channels cannot block because the browser would freeze
+    if (mode == TCL_MODE_BLOCKING) {
+        Tcl_SetErrno(ENOTSUP);
+        return ENOTSUP;
+    }
+    // DEFER(wait-blocking) could theoretically simulate with surftcl_wait
+
+    /* always non-blocking, nothing to do */
+    return 0;
+}
+
+int
+SurfTclBridgeHandler(void *state, int interestMask)
+{
+    // TODO(dther) what do I do here...
+    return EINVAL;
+}
+
+void
+SurfTcl_NotifyBridgeWritable(Tcl_Channel chan)
+{
+    Tcl_NotifyChannel(chan, TCL_WRITABLE);
+    // FIXME this segfaults. I don't know why.
+    //Tcl_AlertNotifier(NULL);
+}
+
+void
+SurfTcl_NotifyBridgeReadable(Tcl_Channel chan)
+{
+    Tcl_NotifyChannel(chan, TCL_READABLE);
+    // FIXME this segfaults. I don't know why.
+    //Tcl_AlertNotifier(NULL);
+}
+
+static const Tcl_ChannelType SurfTclBridgeChannel = {
+    "surftclbridge",
+    TCL_CHANNEL_VERSION_5,
+    NULL, /* unused */
+    SurfTclBridgeInput,
+    SurfTclBridgeOutput,
+    NULL, /* unused */
+    NULL, // DEFER(bridge channels) setOptionProc, don't have any yet
+    NULL, // DEFER(bridge channels) getOptionProc, don't have any yet
+    SurfTclBridgeWatch,
+    NULL, // DEFER(bridge handles) I don't have a scheme for handles locked in
+    SurfTclBridgeClose2,
+    SurfTclBridgeBlockMode,
+    NULL, /* reserved */
+    SurfTclBridgeHandler,
+    NULL, /* can't seek on a FIFO */
+    NULL, // DEFER(threadActionProc) do I need this?
+    NULL, // DEFER(truncateProc) what does this do?
+};
+
+EM_JS(int, SurfTclNewBridge, (const char *handle, Tcl_Channel chan),
+{
+    /* how do I even test if this worked? */
+    Module._surftcl_new_bridge(UTF8ToString(handle), chan);
+});
+
+Tcl_Channel
+SurfTclOpenBridge(Tcl_Interp *interp, const char *handle, int mask)
+{
+    BridgeState *state = (BridgeState *)Tcl_Alloc(sizeof *state);
+    sprintf(state->handle, "%s", handle);
+
+    state->blocking = 0;
+    state->inputClosed = 0;
+    state->outputClosed = 0;
+
+    Tcl_Channel chan = Tcl_CreateChannel(&SurfTclBridgeChannel, handle, state, mask);
+    state->channel = chan;
+
+    Tcl_SetChannelOption(interp, chan, "-blocking", "0");
+    Tcl_SetChannelOption(interp, chan, "-encoding", "binary"); // TODO make this work with UTF8...
+
+    // register on the JS side
+    SurfTclNewBridge(handle, chan);
+    //Tcl_RegisterChannel(interp, chan);
+
+    return chan;
+}
+
+
+int
+SurfTcl_Init(Tcl_Interp *interp)
+{
+    if (!surftclJsRegistryInited) {
+        Tcl_InitHashTable(&surftclJsRegistry, TCL_STRING_KEYS);
+        surftclJsRegistryInited = 1;
+    }
+
+    Tcl_CreateNamespace(interp, "::surftcl",     NULL, NULL);
+    Tcl_CreateNamespace(interp, "::surftcl::js", NULL, NULL);
+
+    Tcl_CreateObjCommand(interp, "::surftcl::dom",        surftcl_DomCmd,      NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::surftcl::js::call",   surftcl_JsCallCmd,   NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::surftcl::js::names",  surftcl_JsNamesCmd,  NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::surftcl::js::revoke", surftcl_JsRevokeCmd, NULL, NULL);
+
+    Tcl_Channel chan = SurfTclOpenBridge(interp, "asdf", TCL_READABLE | TCL_WRITABLE);
+    Tcl_Write(chan, "lolol\n", 6);
+
+    Tcl_PkgProvide(interp, "surftcl", "1.0.0");
+    return TCL_OK;
 }

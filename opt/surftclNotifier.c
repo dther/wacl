@@ -165,4 +165,5 @@ SurfTcl_InstallNotifier(void)
     np.createFileHandlerProc = SurfTclCreateFileHandler;
     np.deleteFileHandlerProc = SurfTclDeleteFileHandler;
     Tcl_SetNotifier(&np);
+    Tcl_InitNotifier();
 }
