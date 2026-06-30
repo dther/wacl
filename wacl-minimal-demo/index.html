@@ -59,7 +59,7 @@
 
 <div class="term" id="term"></div>
 
-<script type="module">
+<script>
 "use strict";
 
 // A tiny channel between a DOM-based terminal surface and anything that wants
@@ -227,21 +227,20 @@ function SurfTclTerminal({ mount, prompt = "% ", onLine = () => {} }) {
 }
 
 // Boot: wire the terminal to the Tcl interpreter once the wasm is ready.
-import * as surftcl from "./surftcl-bootstrap.mjs"
+import("./surftcl-bootstrap.mjs").then((surftcl) => { 
   surftcl.onReady(function (interp) {
     const term = SurfTclTerminal({
       mount: document.getElementById("term"),
       prompt: "% ",
-      // EvalAsync, not Eval: a line may `update` (the wrapper below yields
-      // to the JS event loop), so the result can arrive after a suspension.
-      // Fire-and-forget — the page stays live while a long command yields.
+
       onLine: (line) => {
         if (line === "") return;
-        interp.EvalAsync(line).then((result) => {
+	try {
+          let result = interp.Eval(line)
           if (result !== "") term.write(result + "\n");
-        }).catch((e) => {
+        } catch (e) {
           term.writeErr((e.errorInfo || String(e)) + "\n");
-        });
+        };
       },
     });
 
@@ -250,11 +249,7 @@ import * as surftcl from "./surftcl-bootstrap.mjs"
     interp.stdout = (text) => term.write(text);
     interp.stderr = (text) => term.writeErr(text);
 
-    // `globalThis.surftcl` is already bound (by preJsRequire.js, via
-    // Object.defineProperty before onReady fires) and points at the same
-    // object `interp` does. The wacl-* packages reach the JS bridge through
-    // that global. `__interp` and `__surftcl` stay as aliases for muscle
-    // memory at the JS console — neither is load-bearing anymore.
+    // For testing convenience.
     window.__interp = interp;
     window.__surftcl = surftcl;
 
@@ -338,7 +333,8 @@ import * as surftcl from "./surftcl-bootstrap.mjs"
     //   surftcl.js.register("ping", a => "pong:" + a.join(","))
     //   surftcl.Eval("::surftcl::js::call ping one two three")
     //   surftcl.supportURL = "https://example.com/report"  // try an error
-  });
+  })
+});
 </script>
 
 </body>

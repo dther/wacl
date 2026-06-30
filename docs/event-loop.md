@@ -1,5 +1,21 @@
 # Event-loop integration — design direction
 
+> TODO (dther) Rewrite the section on Asyncify and Yield. I'm removing them.
+> After spending 2 weeks grappling with the Notifier (and managing to cause segfaults in the rendering thread),
+> I've discovered this to be not worth the maintenance effort.
+> Asyncify works by managing its global variables on *every* `ccall` entry,
+> regardless of whether or not it's an asynchronous call,
+> meaning that suspended stacks can get silently clobbered.
+> This means that any JS call to the C side is potentially *retroactively* unsafe in a way that can't be detected.
+>
+> The browser doesn't have a native "safely call C without affecting another call"
+> primitive, yet, but it will once JSPI becomes baseline, which won't be for another year,
+> so the decision will be revisited then.
+>
+> The idiomatic way to get blocking yields from within Tcl for logical reasons
+> is to enqueue coroutines as events.
+> At some point, I'll wrap this in a `Promise` shaped API for requesting code be executed asynchronously.
+
 Status: **working direction from the architecture discussion**, not yet
 built. Records the decision, the reasoning, and the verified Tcl API the
 implementation will rest on, so we resume cleanly rather than re-derive.

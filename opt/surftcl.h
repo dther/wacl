@@ -25,11 +25,4 @@ void SurfTcl_AppendJsErrorCodeElement(const char *s);
 void SurfTcl_InstallNotifier(void);
 int  SurfTcl_ServiceEvents(void);
 
-/*
- * Tcl-side `await`: yield to the JS event loop and resume in place. Backs
- * `::surftcl::js::yield` (and the Tcl `update` wrapper). Needs an Asyncify
- * build; see opt/surftclNotifier.c and docs/event-loop.md.
- */
-int  SurfTcl_Yield(Tcl_Interp *interp);
-
 #endif /* _SURFTCL_H_ */

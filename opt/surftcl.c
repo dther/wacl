@@ -186,23 +186,6 @@ surftcl_JsRevokeCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_OK;
 }
 
-/* ::surftcl::js::yield — relinquish to the JS event loop and resume in place.
- * Thin Tcl front for SurfTcl_Yield (opt/surftclNotifier.c). The idiomatic caller
- * is the Tcl `update` wrapper, not this directly. */
-static int
-surftcl_JsYieldCmd(ClientData clientData, Tcl_Interp *interp,
-           int objc, Tcl_Obj *const objv[])
-{
-    if (objc != 1) {
-        Tcl_WrongNumArgs(interp, 1, objv, NULL);
-        return TCL_ERROR;
-    }
-    // TODO(dther) This should always succeed and preserve the stack.
-    // It currently does not. See surftclNotifier.c
-    return SurfTcl_Yield(interp);
-}
-
-
 /*
  * ::surftcl::dom attr|css selector key value
  *
@@ -264,7 +247,6 @@ SurfTcl_Init(Tcl_Interp *interp)
     Tcl_CreateObjCommand(interp, "::surftcl::js::call",   surftcl_JsCallCmd,   NULL, NULL);
     Tcl_CreateObjCommand(interp, "::surftcl::js::names",  surftcl_JsNamesCmd,  NULL, NULL);
     Tcl_CreateObjCommand(interp, "::surftcl::js::revoke", surftcl_JsRevokeCmd, NULL, NULL);
-    Tcl_CreateObjCommand(interp, "::surftcl::js::yield",  surftcl_JsYieldCmd,  NULL, NULL);
 
     Tcl_PkgProvide(interp, "surftcl", "1.0.0");
     return TCL_OK;

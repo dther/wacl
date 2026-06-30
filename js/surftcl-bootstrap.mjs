@@ -22,10 +22,6 @@ class TclException extends Error {
   };
 };
 
-// TODO(dther) A script should block on `gets stdin` and yield to the browser,
-// unless they've configured it to be non-blocking.
-// This needs to be configured via surftclNotifier.c.
-// Blocking reads should stop the event queue from being serviced, but not stop events from being queued.
 let decoder = new TextDecoder();
 let encoder = new TextEncoder();
 
@@ -306,43 +302,6 @@ Module['postRun'] = function () {
 
     Eval: TclEval,
 
-    // TODO(dther) EvalAsync needs re-considering.
-    // Namely, *it is basically never a good idea to call it directly.*
-    // Yielding logic is incredibly complex at the moment. I don't know how to explain it.
-    // I think I need to rework the entire Notifier...
-    // Should be...
-    // - renamed to something else (ServiceEvents()?)
-    // - have an obvious one-function way to set it up
-    //   (the demos manually patch it in every time)
-    // - generally not something the user cares about at all, because we handle the event loop
-    //   in most cases
-
-    // Async sibling of Eval — the top-level entry for scripts that may
-    // YIELD (`::surftcl::js::yield`, or the `update` wrapper). Returns a
-    // Promise: under the Asyncify build a yielding script unwinds the
-    // wasm stack to the JS event loop and the Promise resolves once it
-    // resumes; a non-yielding script resolves right away. Drive user
-    // input through this. Keep using the synchronous Eval above for
-    // re-entrant/internal calls that need the result immediately and
-    // are known not to yield (the JS bridge re-enters that way, and a
-    // synchronous ccall can't survive an unwind). Error handling
-    // mirrors Eval; the ::errorInfo fetch is itself a non-yielding eval.
-    EvalAsync(script) {
-      var interp = this.interp;
-      return Promise.resolve(
-        Module.ccall('SurfTcl_Eval', 'number', ['number', 'string'],
-                     [interp, script], { async: true })
-      ).then(function (rc) {
-        if (rc !== 0) {
-          var msg = _getStringResult(interp);
-          _eval(interp, 'set ::errorInfo');
-          var trace = _getStringResult(interp);
-          throw new TclException(rc, msg, trace);
-        }
-        return _getStringResult(interp);
-      });
-    },
-
     // Failure surface. The floor is honesty, not an implicit white lie.
     //
     // The default onError handler fires three channels: stderr (visible
@@ -399,7 +358,6 @@ function TclEval(script) {
   return _getStringResult(_Interp);
 }
 
-// this should work, right??
 export async function onReady(func) {
   await createSurfTcl(Module);
   func(Runtime);
