@@ -33,17 +33,6 @@
  * block.
  */
 
-// FIXME(dther) The above assumptions were based on the idea that all yields
-// must be explicit and co-operative. The thing is, it's reasonable to mentally
-// model the JS side as an UI event source, because... That's literally what it is.
-// `vwait` might very well be waiting on a variable or a JS-controlled channel
-// driven by an event callback.
-
-// We still don't want to ever truly block the browser.
-// But a *JS yield is a blocking call* from our point of view,
-// and so it's probably right to refactor SurfTclWaitForEvent, at least,
-// such that it yields to the JS side.
-
 static void *SurfTclInitNotifier(void)            { return NULL; }
 static void  SurfTclFinalizeNotifier(void *cd)    { (void) cd; }
 static void  SurfTclAlertNotifier(void *cd)       { (void) cd; }
@@ -100,21 +89,4 @@ SurfTcl_InstallNotifier(void)
     np.createFileHandlerProc = SurfTclCreateFileHandler;
     np.deleteFileHandlerProc = SurfTclDeleteFileHandler;
     Tcl_SetNotifier(&np);
-}
-
-/*
- * Drain every event that is ready right now and return how many were
- * serviced. This is the pump the JS side calls each loop turn. TCL_DONT_WAIT
- * guarantees we never block; the loop keeps going until nothing more is
- * ready, so a single call fully flushes whatever the page just handed us
- * (channel bytes, due timers, idle tasks) before returning control to JS.
- */
-int
-SurfTcl_ServiceEvents(void)
-{
-    int serviced = 0;
-    while (Tcl_DoOneEvent(TCL_ALL_EVENTS | TCL_DONT_WAIT)) {
-        serviced++;
-    }
-    return serviced;
 }

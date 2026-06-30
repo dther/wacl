@@ -19,10 +19,8 @@ void SurfTcl_AppendJsErrorCodeElement(const char *s);
 /*
  * Main-thread event-loop integration (opt/surftclNotifier.c). SurfTcl_InstallNotifier
  * swaps in a non-blocking notifier and must run before the notifier is first
- * used (call it at the top of main). SurfTcl_ServiceEvents is the JS-driven pump:
- * it drains all ready events without blocking and returns the count.
+ * used (call it at the top of main).
  */
 void SurfTcl_InstallNotifier(void);
-int  SurfTcl_ServiceEvents(void);
 
 #endif /* _SURFTCL_H_ */

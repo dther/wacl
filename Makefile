@@ -48,8 +48,7 @@ SURFTCLEXPORTS = \
         _SurfTcl_RegisterJsFn,\
         _SurfTcl_RevokeJsFn,\
         _SurfTcl_SetJsResultString,\
-        _SurfTcl_AppendJsErrorCodeElement,\
-        _SurfTcl_ServiceEvents\
+        _SurfTcl_AppendJsErrorCodeElement\
     "
 
 SURFTCLCC = \
