@@ -8,6 +8,10 @@ import createSurfTcl from "./surftcl.mjs"
 // this gets passed to the factory on ready
 let Module = {}
 
+// this gets populated with functions by Module['postRun']
+let Runtime = null;
+
+// All Tcl Exceptions are this class
 // Annoyingly, throwing a raw Object arguably has a better UX than Error in Chromium.
 class TclException extends Error {
   constructor (errorCode, errorMessage, errorInfo) {
@@ -21,14 +25,14 @@ class TclException extends Error {
   };
 };
 
-const decoder = new TextDecoder();
-const encoder = new TextEncoder();
-
 // DEFER(channel rework) There isn't a way to convey EOF on emscripten devices.
 // This isn't so bad for stderr and stdout, but causes issues with stdin,
 // which can't tell the difference between "no waiting data" and EOF.
 // `chan eof` will give false reports, and `chan event readable`
 // won't work as expected.
+
+const Decoder = new TextDecoder();
+const Encoder = new TextEncoder();
 
 // Stdin queue. Runtime.pushStdin(text) appends; the FS.init input callback
 // drains one byte at a time. Returning null from the callback means EOF —
@@ -40,7 +44,7 @@ const stdin = {
   write(text) {
     // this is to be used by external code.
     if (this.eof) throw Error("can't write to stdin after close");
-    const bytes = encoder.encode(text);
+    const bytes = Encoder.encode(text);
     for (const b of bytes) this.queue.push(b);
   },
 
@@ -65,7 +69,7 @@ const stdout = {
   flush() {
     if (this.buffer.length === 0) return;
     // FIXME(dther) is this seriously the right way to do it? **AND WHY DOESN'T IT EMIT AN ERROR BY DEFAULT??!**
-    let text = decoder.decode(new Uint8Array(this.buffer));
+    let text = Decoder.decode(new Uint8Array(this.buffer));
     this.buffer.length = 0;
     this.sink(text);
   },
@@ -82,7 +86,7 @@ const stderr = {
   buffer: [],
   flush() {
     if (this.buffer.length === 0) return;
-    let text = decoder.decode(new Uint8Array(this.buffer));
+    let text = Decoder.decode(new Uint8Array(this.buffer));
     this.buffer.length = 0;
     this.sink(text);
   },
@@ -127,84 +131,94 @@ const stderr = {
 // the caller to serialize — JSON is the obvious default and is in the
 // ecosystem already. The bridge moves strings.
 
-let _setJsResult       = null;  // wired in postRun
-let _appendErrorCodeEl = null;
-let _registerJsFn      = null;
-let _revokeJsFn        = null;
+export const JsFunctionRegistry = {
+  _functions: new Map(),
 
-// name -> Emscripten function-table index, used so revoke() can free the
-// slot via removeFunction. The same map drives Runtime.js.names() so we
-// don't have to round-trip into Tcl for introspection.
-var _jsTableMap = Object.create(null);
-
-function _normalizeJsResult(raw) {
-  if (raw === undefined || raw === null) {
-    return { code: 0, value: '', errorCode: null };
-  }
-  if (!Array.isArray(raw)) {
-    return { code: 0, value: String(raw), errorCode: null };
-  }
-  if (raw.length !== 2) {
-    throw new Error('surftcl JS bridge: returned array must be [status, value]');
-  }
-  var status = raw[0];
-  var v = raw[1];
-  var valueStr = (v === undefined || v === null) ? '' : String(v);
-  if (typeof status === 'number') {
-    return { code: status | 0, value: valueStr, errorCode: null };
-  }
-  if (typeof status === 'string') {
-    switch (status) {
-      case 'ok':       return { code: 0, value: valueStr, errorCode: null };
-      case 'error':    return { code: 1, value: valueStr, errorCode: null };
-      case 'return':   return { code: 2, value: valueStr, errorCode: null };
-      case 'break':    return { code: 3, value: valueStr, errorCode: null };
-      case 'continue': return { code: 4, value: valueStr, errorCode: null };
-      default:         return { code: 1, value: valueStr, errorCode: [status] };
+  register(name, fn) {
+    if (typeof name !== 'string')   throw new TypeError('register: name must be a string');
+    if (typeof fn   !== 'function') throw new TypeError('register: fn must be a function');
+    if (this._functions.get(name) !== undefined) {
+      this._revokeJsFn(name);
+      Module.removeFunction(this._functions.get(name));
+      this._functions.delete(name);
     }
-  }
-  if (Array.isArray(status)) {
-    return { code: 1, value: valueStr, errorCode: status.map(String) };
-  }
-  throw new Error('surftcl JS bridge: status must be a number, string, or string array');
-}
 
-function _readArgv(argc, argvPtr) {
-  // argvPtr points at a contiguous array of i32 C-string pointers in
-  // wasm linear memory. Dereference each and decode as UTF-8.
-  var args = new Array(argc);
-  for (var i = 0; i < argc; i++) {
-    var strPtr = Module.getValue(argvPtr + i * 4, 'i32');
-    args[i] = Module.UTF8ToString(strPtr);
-  }
-  return args;
-}
+    let fnPtr = Module.addFunction((argc, argvPtr) => this.call(fn, argc, argvPtr), 'iii');
+    this._functions.set(name, fnPtr);
+    Runtime._registerJsFn(name, fnPtr);
+  },
 
-function _makeJsShim(userFn) {
-  return function (argc, argvPtr) {
-    var args = _readArgv(argc, argvPtr);
-    var raw;
+  revoke(name) {
+    Runtime._revokeJsFn(name);
+    if (this._functions.get(name) !== undefined) {
+      Module.removeFunction(this._functions.get(name));
+      this._functions.delete(name);
+    }
+  },
+
+  names() {
+    // FIXME(dther) this goes out-of-sync with the Tcl side when Tcl revokes a JS function.
+    return this._functions.keys();
+  },
+
+  call(fn, argc, argvPtr) {
+    /* wraps JS functions so that their results are readable by Tcl */
+    // argvPtr points at a contiguous array of i32 C-string pointers in
+    // wasm linear memory. Dereference each and decode as UTF-8.
+    let args = new Array(argc);
+    for (var i = 0; i < argc; i++) {
+      let strPtr = Module.getValue(argvPtr + i * 4, 'i32');
+      args[i] = Module.UTF8ToString(strPtr);
+    }
+
+    let r;
     try {
-      raw = userFn(args);
+      let raw = fn(args);
+      r = this.normalizeResult(raw);
     } catch (e) {
-      _setJsResult((e && e.message) ? e.message : String(e));
+      Runtime._setJsResult((e && e.message) ? e.message : String(e));
       return 1;
     }
-    var r;
-    try {
-      r = _normalizeJsResult(raw);
-    } catch (e) {
-      _setJsResult(e.message);
-      return 1;
-    }
-    _setJsResult(r.value);
+    Runtime._setJsResult(r.value);
     if (r.errorCode) {
-      for (var i = 0; i < r.errorCode.length; i++) {
-        _appendErrorCodeEl(r.errorCode[i]);
+      for (let i = 0; i < r.errorCode.length; i++) {
+        Runtime._appendJsErrorCode(r.errorCode[i]);
       }
     }
     return r.code;
-  };
+  },
+
+  normalizeResult(raw) {
+    if (raw === undefined || raw === null) {
+      return { code: 0, value: '', errorCode: null };
+    }
+    if (!Array.isArray(raw)) {
+      return { code: 0, value: String(raw), errorCode: null };
+    }
+    if (raw.length !== 2) {
+      throw new Error('surftcl JS bridge: returned array must be [status, value]');
+    }
+    var status = raw[0];
+    var v = raw[1];
+    var valueStr = (v === undefined || v === null) ? '' : String(v);
+    if (typeof status === 'number') {
+      return { code: status | 0, value: valueStr, errorCode: null };
+    }
+    if (typeof status === 'string') {
+      switch (status) {
+        case 'ok':       return { code: 0, value: valueStr, errorCode: null };
+        case 'error':    return { code: 1, value: valueStr, errorCode: null };
+        case 'return':   return { code: 2, value: valueStr, errorCode: null };
+        case 'break':    return { code: 3, value: valueStr, errorCode: null };
+        case 'continue': return { code: 4, value: valueStr, errorCode: null };
+        default:         return { code: 1, value: valueStr, errorCode: [status] };
+      }
+    }
+    if (Array.isArray(status)) {
+      return { code: 1, value: valueStr, errorCode: status.map(String) };
+    }
+    throw new Error('surftcl JS bridge: status must be a number, string, or string array');
+  },
 }
 
 // -------------------------------------------------------------------------
@@ -223,67 +237,48 @@ Module['preRun'] = function () {
   );
 };
 
-let _Interp = null;
-let _getInterp = null;
-let _eval = null;
-let _getStringResult = null;
-let Runtime = null;
-Module['postRun'] = function () {
-  _getInterp         = Module.cwrap('SurfTcl_GetInterp',                'number', []);
-  _eval              = Module.cwrap('SurfTcl_Eval',                     'number', ['number', 'string']);
-  _getStringResult   = Module.cwrap('SurfTcl_GetStringResult',          'string', ['number']);
-  _setJsResult       = Module.cwrap('SurfTcl_SetJsResultString',          null,   ['string']);
-  _appendErrorCodeEl = Module.cwrap('SurfTcl_AppendJsErrorCodeElement',   null,   ['string']);
-  _registerJsFn      = Module.cwrap('SurfTcl_RegisterJsFn',             'number', ['string', 'number']);
-  _revokeJsFn        = Module.cwrap('SurfTcl_RevokeJsFn',               'number', ['string']);
-  _Interp = _getInterp();
-
+Module['postRun'] = () => {
   Runtime = {
     Module: Module,
+    _getStringResult: Module.cwrap('SurfTcl_GetStringResult', 'string', ['number']),
+    _getInterp:       Module.cwrap('SurfTcl_GetInterp',       'number', []),
+    _eval:            Module.cwrap('SurfTcl_Eval',            'number', ['number', 'string']),
 
-    set stdout(fn) { stdout.sink = fn; },
-    set stderr(fn) { stderr.sink = fn; },
+    // The thinnest sensible wrapper around Tcl_EvalEx: pass the script,
+    // get rc + result. On error, fetch ::errorInfo for the trace before
+    // throwing, since asking for it later would mean re-running Tcl when
+    // the page just wants to print what went wrong.
+    Eval: (script) => {
+      let interp = Runtime._getInterp();
+      let rc = Runtime._eval(interp, script);
+      if (rc !== 0) {
+        let msg = Runtime._getStringResult(interp);
+        Runtime._eval(interp, 'set ::errorInfo');
+        let trace = Runtime._getStringResult(interp);
+        Runtime._eval(interp, 'set ::errorCode');
+        let code = Runtime._getStringResult(interp);
+        throw new TclException(code, msg, trace);
+      }
+      return Runtime._getStringResult(interp);
+    },
 
     pushStdin: stdin.write.bind(stdin),
     closeStdin: stdin.close.bind(stdin),
+    set stdout(fn) { stdout.sink = fn; },
+    set stderr(fn) { stderr.sink = fn; },
 
-    get interp() { return _Interp; },
+    js: JsFunctionRegistry,
+    _appendJsErrorCode: Module.cwrap('SurfTcl_AppendJsErrorCodeElement',   null,   ['string']),
+    _setJsResult:       Module.cwrap('SurfTcl_SetJsResultString',          null,   ['string']),
+    _registerJsFn:      Module.cwrap('SurfTcl_RegisterJsFn',             'number', ['string', 'number']),
+    _revokeJsFn:        Module.cwrap('SurfTcl_RevokeJsFn',               'number', ['string']),
 
-    // JS function registry. See the top-of-file comment for the protocol.
-    // register replaces any prior binding under the same name; revoke is
-    // safe to call for names that aren't registered. names() returns the
-    // currently-granted names as a JS array.
-    js: {
-      register(name, fn) {
-        if (typeof name !== 'string')   throw new TypeError('register: name must be a string');
-        if (typeof fn   !== 'function') throw new TypeError('register: fn must be a function');
-        if (_jsTableMap[name] !== undefined) {
-          _revokeJsFn(name);
-          Module.removeFunction(_jsTableMap[name]);
-          delete _jsTableMap[name];
-        }
-        var fnPtr = Module.addFunction(_makeJsShim(fn), 'iii');
-        _jsTableMap[name] = fnPtr;
-        _registerJsFn(name, fnPtr);
-      },
-      revoke: function (name) {
-        _revokeJsFn(name);
-        if (_jsTableMap[name] !== undefined) {
-          Module.removeFunction(_jsTableMap[name]);
-          delete _jsTableMap[name];
-        }
-      },
-      names: function () {
-        return Object.keys(_jsTableMap);
-      },
-    },
-
-    // Grants `surftk::js::call eval` privileges to the interpreter.
+    // Grants `surftcl::js::call eval` privileges to the interpreter.
     // Intentionally scoped to this module, such that `surftcl` is bound to
     // the runtime after initialisation.
     GrantEval() {
       let surftcl = this;
-      this.js.register("eval", function (args) {
+      this.js.register("eval", (args) => {
         let r = eval(args[0]);
         if (r === undefined) return "";
         if (typeof r === "object") return JSON.stringify(r);
@@ -298,8 +293,6 @@ Module['postRun'] = function () {
       };
       this.RevokeEval();
     },
-
-    Eval: TclEval,
 
     // Failure surface. The floor is honesty, not an implicit white lie.
     //
@@ -338,23 +331,6 @@ Module['postRun'] = function () {
       }
     }
   };
-}
-
-// The thinnest sensible wrapper around Tcl_EvalEx: pass the script,
-// get rc + result. On error, fetch ::errorInfo for the trace before
-// throwing, since asking for it later would mean re-running Tcl when
-// the page just wants to print what went wrong.
-function TclEval(script) {
-  let rc = _eval(_Interp, script);
-  if (rc !== 0) {
-    let msg = _getStringResult(_Interp);
-    _eval(_Interp, 'set ::errorInfo');
-    let trace = _getStringResult(_Interp);
-    _eval(_Interp, 'set ::errorCode');
-    let code = _getStringResult(_Interp);
-    throw new TclException(code, msg, trace);
-  }
-  return _getStringResult(_Interp);
 }
 
 await createSurfTcl(Module);
