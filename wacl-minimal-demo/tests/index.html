@@ -118,7 +118,7 @@ header a:hover { color: var(--accent); }
 
 <div class="loading" id="loading">loading surftcl test environment…</div>
 
-<script type="module">
+<script>
 "use strict";
 
 const logEl = document.getElementById("log");
@@ -177,8 +177,8 @@ const filesToInject = [
   ["../../tests/wacl-bridge.test",         "/tests/wacl-bridge.test"],
 ];
 
-import * as surftcl from "../surftcl-bootstrap.mjs"
-  surftcl.onReady(function (interp) {
+import("../surftcl-bootstrap.mjs").then((surftcl) => {
+  let interp = surftcl.default;
     interp.stdout = (t) => appendLog(t, false);
     interp.stderr = (t) => appendLog(t, true);
 
