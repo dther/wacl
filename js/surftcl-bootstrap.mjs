@@ -1,8 +1,7 @@
-// minimum viable ES6 module!!!
-// the idea: surftcl-bootstrap.mjs is the entry point that sets up the JS API
-// surftcl.mjs is the Emscripten module encapsulating the runtime directly
-// I intend to rename these later, such that this file becomes "surftcl.mjs"
-// and there's more than one build. surftcl.mjs just selects based on configuration.
+// SurfTcl module entry point
+// Performs the necessary setup for the SurfTcl Runtime,
+// exporting the "Runtime" object by default, which contains
+// SurfTcl's public JS API.
 
 import createSurfTcl from "./surftcl.mjs"
 
@@ -24,6 +23,12 @@ class TclException extends Error {
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
+
+// DEFER(channel rework) There isn't a way to convey EOF on emscripten devices.
+// This isn't so bad for stderr and stdout, but causes issues with stdin,
+// which can't tell the difference between "no waiting data" and EOF.
+// `chan eof` will give false reports, and `chan event readable`
+// won't work as expected.
 
 // Stdin queue. Runtime.pushStdin(text) appends; the FS.init input callback
 // drains one byte at a time. Returning null from the callback means EOF —
@@ -51,17 +56,11 @@ const stdin = {
   },
 };
 
-// I/O sinks. Defaults route to the JS console — the first place a developer
-// looks when something's wrong. Pages override via Runtime.stdout = fn and
-// Runtime.stderr = fn after onReady. We hand the sink the bytes Tcl emitted
-// as text, *including* any trailing newline — same byte stream xterm.js or
-// a remote shell would see.
-
+// I/O sinks. Page can override through `Runtime.stdin = (text) => {...}`.
 // Output is delivered to FS.init per byte (or null for flush). We
 // accumulate per stream until a newline or flush, then hand a decoded
 // string to the sink.
 const stdout = {
-  // TODO(dther) is there a way to find out EOF on stdout or stderr?
   buffer: [],
   flush() {
     if (this.buffer.length === 0) return;
