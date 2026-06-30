@@ -22,8 +22,8 @@ class TclException extends Error {
   };
 };
 
-let decoder = new TextDecoder();
-let encoder = new TextEncoder();
+const decoder = new TextDecoder();
+const encoder = new TextEncoder();
 
 // Stdin queue. Runtime.pushStdin(text) appends; the FS.init input callback
 // drains one byte at a time. Returning null from the callback means EOF —
@@ -358,7 +358,5 @@ function TclEval(script) {
   return _getStringResult(_Interp);
 }
 
-export async function onReady(func) {
-  await createSurfTcl(Module);
-  func(Runtime);
-}
+await createSurfTcl(Module);
+export default Runtime;

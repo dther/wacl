@@ -228,7 +228,7 @@ function SurfTclTerminal({ mount, prompt = "% ", onLine = () => {} }) {
 
 // Boot: wire the terminal to the Tcl interpreter once the wasm is ready.
 import("./surftcl-bootstrap.mjs").then((surftcl) => { 
-  surftcl.onReady(function (interp) {
+  let interp = surftcl.default;
     const term = SurfTclTerminal({
       mount: document.getElementById("term"),
       prompt: "% ",
@@ -333,7 +333,6 @@ import("./surftcl-bootstrap.mjs").then((surftcl) => {
     //   surftcl.js.register("ping", a => "pong:" + a.join(","))
     //   surftcl.Eval("::surftcl::js::call ping one two three")
     //   surftcl.supportURL = "https://example.com/report"  // try an error
-  })
 });
 </script>
 
