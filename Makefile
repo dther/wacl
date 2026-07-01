@@ -2,13 +2,11 @@
 #
 # Targets that matter:
 #   make tcl          download and unpack Tcl 9 source under ./tcl/
-#   make minimal      build wacl-minimal.{js,wasm} (Asyncify/yield-capable,
-#                     ~4MB) and copy them into wacl-minimal-demo/
+#   make minimal      build wacl-minimal.{js,wasm} and copy them into wacl-minimal-demo/
 #   make surftcl-demo build the wasm, then copy the demo site (pages, wasm,
 #                     packages, tests) into the surftcl-demo repo
 #   make packages     build the per-package release zips under ext/build/
-#   make test         build the wasm + zips, then run the tcltest + async suites
-#   make test-async   build the wasm, then run just the async/yield harness
+#   make test         build the wasm + zips, then run the tcltest suites
 #   make clean        remove build artefacts but keep ./tcl/
 #   make distclean    also remove ./tcl/
 #   make fullclean    remove the Tcl source tar, too
@@ -55,7 +53,7 @@ SURFTCLCC = \
     -I tcl/unix -I tcl/generic -I tcl/libtommath -I opt $(BCFLAGS) \
     -DSTATIC_BUILD=1 -DBUILD_tcl -DTCL_THREADS=0
 
-.PHONY: minimal surftcl-demo packages test test-async clean distclean fullclean
+.PHONY: minimal surftcl-demo packages test clean distclean fullclean
 
 default: minimal
 
@@ -65,17 +63,8 @@ default: minimal
 packages:
 	$(MAKE) -C ext
 
-# `test` runs both suites: run-headless.mjs (the tcltest package suites) and
-# run-async.mjs (the yield/event-loop core, which the synchronous tcltest path
-# can't reach). `test-async` runs only the latter — it needs the wasm but not
-# the package zips, so it's the fast loop while working on the notifier/yield C.
 test: minimal packages
 	node tests/run-headless.mjs
-	node tests/run-async.mjs
-
-test-async: minimal
-	node tests/run-async.mjs
-
 tcl:
 	wget -nc $(TCLURL)
 	mkdir -p tcl
@@ -100,27 +89,17 @@ tcl/unix/Makefile: tcl
 tcl/unix/libtcl9.0.a: tcl/unix/Makefile
 	cd tcl/unix && emmake make libtcl9.0.a
 
-# The baseline build is Asyncify-enabled: -DSURFTCL_ASYNCIFY turns on
-# `::surftcl::js::yield` (emscripten_sleep-backed) and -sASYNCIFY instruments
-# the module so a synchronous Tcl call can unwind to the JS event loop and
-# resume in place. This is what makes `interp.Eval` async and the `update`
-# wrapper work — the event-loop story SurfTcl is built on (docs/event-loop.md).
-# It costs ~1.5x size (≈4MB) and a speed tax; Binaryen instruments broadly
-# because Tcl's function pointers defeat call-graph scoping. JSPI is the
-# lighter successor once it's cross-browser — the C and the `update` wrapper
-# are mechanism-agnostic, so that swap is localized.
 surftcl.o: opt/surftcl.c
-	emcc $(SURFTCLCC) -DSURFTCL_ASYNCIFY -c $^ -o $@
+	emcc $(SURFTCLCC) -c $^ -o $@
 
 surftclAppInit.o: opt/surftclAppInit.c
-	emcc $(SURFTCLCC) -DSURFTCL_ASYNCIFY -c $^ -o $@
+	emcc $(SURFTCLCC) -c $^ -o $@
 
 surftclNotifier.o: opt/surftclNotifier.c
-	emcc $(SURFTCLCC) -DSURFTCL_ASYNCIFY -c $^ -o $@
+	emcc $(SURFTCLCC) -c $^ -o $@
 
 surftcl.mjs: surftcl.o surftclAppInit.o surftclNotifier.o tcl/unix/libtcl9.0.a
 	emcc $(WASMFLAGS_MINIMAL) $(SURFTCLEXPORTS) \
-	    -sASYNCIFY -sASYNCIFY_STACK_SIZE=1048576 \
 	    $^ -o $@
 
 surftcl.wasm: surftcl.mjs
