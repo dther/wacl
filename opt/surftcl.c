@@ -102,6 +102,7 @@ surftcl_JsCallCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
+    // DEFER(js load testing) A hash lookup per JS call is a potential bottleneck.
     const char *name = Tcl_GetString(objv[1]);
     Tcl_HashEntry *e = Tcl_FindHashEntry(&surftclJsRegistry, name);
     if (e == NULL) {
@@ -164,13 +165,6 @@ surftcl_JsNamesCmd(ClientData clientData, Tcl_Interp *interp,
  * A polite guest can do the former, never the latter. This is the
  * Tcl-side seal — bootstrap requires what it wants, then revokes
  * `eval` (and anything else broad) before user input lands.
- *
- * The C side just removes the hash entry. The JS-side `surftcl.js.revoke`
- * additionally frees the Emscripten function-table slot via
- * removeFunction; revoking from Tcl leaves the slot allocated until
- * either the page reloads or someone re-registers the same name
- * (which fires the JS-side cleanup path). Small live-only cost, never
- * a real leak.
  */
 static int
 surftcl_JsRevokeCmd(ClientData clientData, Tcl_Interp *interp,
@@ -181,56 +175,12 @@ surftcl_JsRevokeCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
     const char *name = Tcl_GetString(objv[1]);
-    int removed = SurfTcl_RevokeJsFn(name);
+    int removed = EM_ASM_INT({
+        return Module.SurfTcl.js.revoke(Module.UTF8ToString($0));
+    }, name);
     Tcl_SetObjResult(interp, Tcl_NewIntObj(removed));
     return TCL_OK;
 }
-
-/*
- * ::surftcl::dom attr|css selector key value
- *
- * The pre-tDom DOM op. Kept as-is for now; will be retired once tDom is
- * brought in and the equivalent ops are exposed as registered JS functions
- * scoped to a chosen root node.
- */
-static int
-surftcl_DomCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
-{
-    if (objc != 5) {
-        Tcl_WrongNumArgs(interp, 1, objv, "attr|css selector key val");
-        return TCL_ERROR;
-    }
-
-    const char *action   = Tcl_GetString(objv[1]);
-    const char *selector = Tcl_GetString(objv[2]);
-    const char *key      = Tcl_GetString(objv[3]);
-    const char *val      = Tcl_GetString(objv[4]);
-
-    if (strcmp(action, "attr") != 0 && strcmp(action, "css") != 0) {
-        Tcl_SetObjResult(interp, Tcl_NewStringObj("Action must be attr or css", -1));
-        return TCL_ERROR;
-    }
-
-    int numChanged = EM_ASM_INT({
-        var action   = UTF8ToString($0);
-        var selector = UTF8ToString($1);
-        var key      = UTF8ToString($2);
-        var val      = UTF8ToString($3);
-        var elts = document.querySelectorAll(selector);
-        for (var i = 0; i < elts.length; i++) {
-            if (action === "attr") {
-                elts[i][key] = val;
-            } else {
-                elts[i].style[key] = val;
-            }
-        }
-        return elts.length;
-    }, action, selector, key, val);
-
-    Tcl_SetObjResult(interp, Tcl_NewIntObj(numChanged));
-    return TCL_OK;
-}
-
 
 int
 SurfTcl_Init(Tcl_Interp *interp)
@@ -243,7 +193,6 @@ SurfTcl_Init(Tcl_Interp *interp)
     Tcl_CreateNamespace(interp, "::surftcl",     NULL, NULL);
     Tcl_CreateNamespace(interp, "::surftcl::js", NULL, NULL);
 
-    Tcl_CreateObjCommand(interp, "::surftcl::dom",        surftcl_DomCmd,      NULL, NULL);
     Tcl_CreateObjCommand(interp, "::surftcl::js::call",   surftcl_JsCallCmd,   NULL, NULL);
     Tcl_CreateObjCommand(interp, "::surftcl::js::names",  surftcl_JsNamesCmd,  NULL, NULL);
     Tcl_CreateObjCommand(interp, "::surftcl::js::revoke", surftcl_JsRevokeCmd, NULL, NULL);

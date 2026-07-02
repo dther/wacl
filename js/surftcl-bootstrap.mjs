@@ -185,11 +185,12 @@ export const JsFunctionRegistry = {
     if (this._functions.get(name) !== undefined) {
       Module.removeFunction(this._functions.get(name));
       this._functions.delete(name);
+      return 1;
     }
+    return 0;
   },
 
   names() {
-    // FIXME(dther) this goes out-of-sync with the Tcl side when Tcl revokes a JS function.
     return this._functions.keys();
   },
 
