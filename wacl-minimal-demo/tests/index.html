@@ -179,8 +179,8 @@ const filesToInject = [
 
 import("../surftcl-bootstrap.mjs").then((surftcl) => {
   let interp = surftcl.default;
-    interp.stdout = (t) => appendLog(t, false);
-    interp.stderr = (t) => appendLog(t, true);
+    interp.stdout.sink = (t) => appendLog(t, false);
+    interp.stderr.sink = (t) => appendLog(t, true);
 
     // Grant eval — the packages still need it for their JS shim install.
     interp.GrantEval();

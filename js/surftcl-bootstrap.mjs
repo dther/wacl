@@ -5,14 +5,20 @@
 
 import createSurfTcl from "./surftcl.mjs"
 
-// this gets passed to the factory on ready
-let Module = {}
+// The Module object configures Emscripten glue code,
+// and will be further populated at runtime.
+//
+// See the following docs for more info:
+//   https://emscripten.org/docs/api_reference/module.html
+export const Module = {
+  noInitialRun: false,
+  noExitRuntime: true,
+};
 
-// this gets populated with functions by Module['postRun']
+// this gets populated with functions by Module['postRun'].
 let Runtime = null;
 
 // All Tcl Exceptions are this class
-// Annoyingly, throwing a raw Object arguably has a better UX than Error in Chromium.
 class TclException extends Error {
   constructor (errorCode, errorMessage, errorInfo) {
     let message = `SurfTcl.TclException: ${errorCode}\n${errorInfo || errorMessage}`
@@ -25,11 +31,18 @@ class TclException extends Error {
   };
 };
 
-// DEFER(channel rework) There isn't a way to convey EOF on emscripten devices.
-// This isn't so bad for stderr and stdout, but causes issues with stdin,
-// which can't tell the difference between "no waiting data" and EOF.
-// `chan eof` will give false reports, and `chan event readable`
-// won't work as expected.
+// DEFER(error handling) SurfTcl usage errors should probably get their own class, too.
+//   As should "TclPanics", which interact with `Tcl_Panic` and unwind the interpreter.
+
+// I/O ------------------------------------------------------------------------
+
+// DEFER(channel rework) Emscripten's stdio devices break many of Tcl's assumptions.
+//   They're never blocking, so `fconfigure` is false by default.
+//   There also isn't a way to convey EOF on emscripten devices.
+//   This isn't so bad for stderr and stdout, but causes issues with stdin,
+//   which can't tell the difference between "no waiting data" and EOF.
+//   `chan eof` will give false reports, and `chan event readable`
+//   won't work as expected.
 
 const Decoder = new TextDecoder();
 const Encoder = new TextEncoder();
@@ -99,6 +112,18 @@ const stderr = {
   sink: (text) => console.log('SurfTcl stderr: ' + text),
 };
 
+// FS.init must be wired in preRun so /dev/stdin, /dev/stdout, /dev/stderr
+// are devices backed by callbacks before main() runs and Tcl opens them.
+// DEFER(channel rework) can we replace these entirely, so that they emit EAGAIN?
+Module['preRun'] = function () {
+  Module.FS.init(
+    // bind is necessary because of how the "this" keyword works
+    stdin._read_callback.bind(stdin),
+    stdout._write_callback.bind(stdout),
+    stderr._write_callback.bind(stderr)
+  );
+};
+
 // ---- JS function registry ------------------------------------------------
 //
 // The host (page) grants JS functions to the inner Tcl interp by name. Tcl
@@ -131,6 +156,13 @@ const stderr = {
 // the caller to serialize — JSON is the obvious default and is in the
 // ecosystem already. The bridge moves strings.
 
+// DEFER(js bridge rework) This protocol is complex and error-prone.
+//   there's a lot of implicit type conversion.
+
+// DEFER(error handling) Failure to adhere to the Return-value protocol should
+//   bubble up as a JS exception and unwind the Tcl interpreter.
+//   Possibly as a TclPanic.
+
 export const JsFunctionRegistry = {
   _functions: new Map(),
 
@@ -162,7 +194,7 @@ export const JsFunctionRegistry = {
   },
 
   call(fn, argc, argvPtr) {
-    /* wraps JS functions so that their results are readable by Tcl */
+    /* wraps values returned by functions so that they are readable in Tcl */
     // argvPtr points at a contiguous array of i32 C-string pointers in
     // wasm linear memory. Dereference each and decode as UTF-8.
     let args = new Array(argc);
@@ -176,6 +208,7 @@ export const JsFunctionRegistry = {
       let raw = fn(args);
       r = this.normalizeResult(raw);
     } catch (e) {
+      // DEFER(error handling) differentiate between JS errors and SurfTcl API errors
       Runtime._setJsResult((e && e.message) ? e.message : String(e));
       return 1;
     }
@@ -189,6 +222,7 @@ export const JsFunctionRegistry = {
   },
 
   normalizeResult(raw) {
+    // Turns a JS value into an Array which this.call() unpacks into Tcl return values.
     if (raw === undefined || raw === null) {
       return { code: 0, value: '', errorCode: null };
     }
@@ -223,26 +257,16 @@ export const JsFunctionRegistry = {
 
 // -------------------------------------------------------------------------
 
-Module['noInitialRun'] = false;
-Module['noExitRuntime'] = true;
-
-// FS.init must be wired in preRun so /dev/stdin, /dev/stdout, /dev/stderr
-// are devices backed by callbacks before main() runs and Tcl opens them.
-Module['preRun'] = function () {
-  Module.FS.init(
-    // bind is necessary because of how the "this" keyword works
-    stdin._read_callback.bind(stdin),
-    stdout._write_callback.bind(stdout),
-    stderr._write_callback.bind(stderr)
-  );
-};
-
 Module['postRun'] = () => {
   Runtime = {
     Module: Module,
     _getStringResult: Module.cwrap('SurfTcl_GetStringResult', 'string', ['number']),
     _getInterp:       Module.cwrap('SurfTcl_GetInterp',       'number', []),
     _eval:            Module.cwrap('SurfTcl_Eval',            'number', ['number', 'string']),
+
+    stdin:  stdin,
+    stdout: stdout,
+    stderr: stderr,
 
     // The thinnest sensible wrapper around Tcl_EvalEx: pass the script,
     // get rc + result. On error, fetch ::errorInfo for the trace before
@@ -262,21 +286,18 @@ Module['postRun'] = () => {
       return Runtime._getStringResult(interp);
     },
 
-    pushStdin: stdin.write.bind(stdin),
-    closeStdin: stdin.close.bind(stdin),
-    set stdout(fn) { stdout.sink = fn; },
-    set stderr(fn) { stderr.sink = fn; },
-
     js: JsFunctionRegistry,
     _appendJsErrorCode: Module.cwrap('SurfTcl_AppendJsErrorCodeElement',   null,   ['string']),
     _setJsResult:       Module.cwrap('SurfTcl_SetJsResultString',          null,   ['string']),
     _registerJsFn:      Module.cwrap('SurfTcl_RegisterJsFn',             'number', ['string', 'number']),
     _revokeJsFn:        Module.cwrap('SurfTcl_RevokeJsFn',               'number', ['string']),
 
-    // Grants `surftcl::js::call eval` privileges to the interpreter.
-    // Intentionally scoped to this module, such that `surftcl` is bound to
-    // the runtime after initialisation.
     GrantEval() {
+      // Grants `surftcl::js::call eval` privileges to the interpreter.
+      // scoped to this module such that `surftcl` is bound to the runtime after
+      // initialisation and globalThis refers to the SurfTcl module, not the page.
+      // TODO(dther) The scoping is potentially surprising. I need to document it,
+      // and explain the escape hatch: `(0, eval)(...)`
       let surftcl = this;
       this.js.register("eval", (args) => {
         let r = eval(args[0]);
@@ -294,6 +315,7 @@ Module['postRun'] = () => {
       this.RevokeEval();
     },
 
+    // FIXME(dther) this error surface doesn't work right, yet. Ironic.
     // Failure surface. The floor is honesty, not an implicit white lie.
     //
     // The default onError handler fires three channels: stderr (visible
@@ -331,6 +353,9 @@ Module['postRun'] = () => {
       }
     }
   };
+
+  // Finally, so that we can access this runtime from the WASM side...
+  Module['SurfTcl'] = Runtime;
 }
 
 await createSurfTcl(Module);

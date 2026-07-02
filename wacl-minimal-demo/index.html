@@ -246,8 +246,8 @@ import("./surftcl-bootstrap.mjs").then((surftcl) => {
 
     // The interp's stdout/stderr now go through FS.init. Sinks receive the
     // byte stream Tcl emits, line-buffered to text, with newlines preserved.
-    interp.stdout = (text) => term.write(text);
-    interp.stderr = (text) => term.writeErr(text);
+    interp.stdout.sink = (text) => term.write(text);
+    interp.stderr.sink = (text) => term.writeErr(text);
 
     // For testing convenience.
     window.__interp = interp;
