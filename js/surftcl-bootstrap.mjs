@@ -4,6 +4,7 @@
 // SurfTcl's public JS API.
 
 import createSurfTcl from "./surftcl.mjs"
+export const VERSION = '0.0.0'
 
 // The Module object configures Emscripten glue code,
 // and will be further populated at runtime.
@@ -15,24 +16,51 @@ export const Module = {
   noExitRuntime: true,
 };
 
+// Runtime contains all of our runtime-accessible parameters and functions.
 // this gets populated with functions by Module['postRun'].
-let Runtime = null;
+export let Runtime = null;
 
-// All Tcl Exceptions are this class
-class TclException extends Error {
-  constructor (errorCode, errorMessage, errorInfo) {
+export class TclException extends Error {
+  // TclException: All interpreter thrown exceptions are this class.
+  static BRAND = Symbol.for("surftcl.exception");
+
+  constructor (errorCode, errorMessage, errorInfo, options = {}) {
     let message = `SurfTcl.TclException: ${errorCode}\n${errorInfo || errorMessage}`
-    super(message);
+    super(message, options);
 
     // for catchers expecting a Tcl error
+    this[TclException.BRAND] = true;
     this.errorCode = errorCode; // Tcl list of error codes, e.g., {POSIX NOENT}
     this.errorMessage = errorMessage;  // immediate message from the interp
     this.errorInfo = errorInfo || errorMessage;  // full ::errorInfo trace
   };
+
+  static [Symbol.hasInstance](x) {
+    return x != null && x[TclException.BRAND] === true;
+  }
 };
 
-// DEFER(error handling) SurfTcl usage errors should probably get their own class, too.
-//   As should "TclPanics", which interact with `Tcl_Panic` and unwind the interpreter.
+export class TclPanic extends Error {
+  /* Errors that unwind the interpreter are Tcl Panics, and are unrecoverable
+   * unless explicity caught and wrapped by the JS runtime.
+   *
+   * The Tcl interpreter may throw this itself as a result of Tcl_Panic.
+   * In that case, the cause will be the string "Tcl_Panic Called".
+   */
+  // TODO (dther) doesn't do anything right now
+  // TODO (dther) special Tcl_Panic handler needs to be set in the C side
+  static BRAND = Symbol.for("surftcl.panic");
+
+  constructor (msg, options = { cause: 'unknown' }) {
+    let message = `!! SurfTcl PANIC !! ${panic}\n${options.cause ?? ''}`
+    super(message, options);
+    this[TclPanic.BRAND] = true;
+  }
+
+  static [Symbol.hasInstance](x) {
+    return x != null && x[TclPanic.BRAND] === true;
+  }
+};
 
 // I/O ------------------------------------------------------------------------
 
@@ -124,46 +152,55 @@ Module['preRun'] = function () {
   );
 };
 
-// ---- JS function registry ------------------------------------------------
-//
-// The host (page) grants JS functions to the inner Tcl interp by name. Tcl
-// calls them via `::surftcl::js::call NAME ARG_LIST`; the list elements arrive
-// on the JS side as a single array argument of strings. The Tcl bridge is
-// type-blind — all marshalling and any application-level type checking is
-// up to the JS function. See opt/wacl.c for the C-side protocol.
-//
-// The host may revoke any granted function. This is the lever for the
-// bootstrap-then-seal pattern: page registers `eval` (and whatever else it
-// wants), Tcl bootstrap runs, page revokes `eval` before any untrusted
-// script gets to evaluate. SurfTcl is a polite guest — what it can do is
-// exactly what the host gave it, and only for as long as the host allows.
-//
-// Return-value protocol (the JS function's actual return):
-//
-//   undefined, null      -> Tcl result is "", code is TCL_OK
-//   any non-array value  -> Tcl result is String(value), code is TCL_OK
-//   [status, value]      -> dispatch on status:
-//     number n             -> Tcl return code is n. 0=OK, 1=ERROR,
-//                             2=RETURN, 3=BREAK, 4=CONTINUE; >=5 are custom
-//                             codes that `catch` can pick up.
-//     "ok"|"error"|"return"|"break"|"continue"
-//                          -> the corresponding code by name (lowercase only).
-//     other string         -> TCL_ERROR with ::errorCode = {string}.
-//     array of strings     -> TCL_ERROR with ::errorCode = that array.
-//   thrown Error           -> TCL_ERROR with the error's message.
-//
-// Anything richer than a string (objects, arrays of non-strings) is up to
-// the caller to serialize — JSON is the obvious default and is in the
-// ecosystem already. The bridge moves strings.
-
-// DEFER(js bridge rework) This protocol is complex and error-prone.
-//   there's a lot of implicit type conversion.
-
-// DEFER(error handling) Failure to adhere to the Return-value protocol should
-//   bubble up as a JS exception and unwind the Tcl interpreter.
-//   Possibly as a TclPanic.
-
 export const JsFunctionRegistry = {
+  /* SurfTcl.JsFunctionRegistry manages the capability to execute JS from within
+   * the Tcl interpreter.
+   *
+   * The host (page) grants JS functions to the inner Tcl interp by name. Tcl
+   * calls them via `::surftcl::js::call NAME ARG_LIST`; the list elements arrive
+   * on the JS side as a single array argument of strings. The Tcl bridge is
+   * type-blind — all marshalling and any application-level type checking is
+   * up to the JS function. See opt/wacl.c for the C-side protocol.
+   *
+   * The host may revoke any granted function. This is the lever for the
+   * bootstrap-then-seal pattern: page registers `eval` (and whatever else it
+   * wants), Tcl bootstrap runs, page revokes `eval` before any untrusted
+   * script gets to evaluate. SurfTcl is a polite guest — what it can do is
+   * exactly what the host gave it, and only for as long as the host allows.
+   *
+   * Return-value protocol (the JS function's actual return):
+   *
+   *   TclResult object   -> Sets return options directly. See the TclResult object.
+   *                         Throws its own Errors on use.
+   *   undefined, null    -> Tcl result is "", code is TCL_OK
+   *   any other value    -> Tcl result is String(value), code is TCL_OK,
+   *                         unless value fails to be converted to a String,
+   *                         in which case, TCL_ERROR with code
+   *                         `SURFTCL JS BADTYPE ${Object.prototype.toString.call(value)}`.
+   *   thrown Error/Primitive -> TCL_ERROR with a result based on String(e),
+   *                          and error code is set to
+   *                          `SURFTCL JS THREW ${e.name ?? Object.prototype.toString.call(e)}`
+   *
+   * Anything richer than a string (objects, arrays of non-strings) is up to
+   * the caller to serialize — JSON is the obvious default and is in the
+   * ecosystem already. The bridge moves strings.
+   */
+
+  // DEFER(pledge) A wrapper around bootstrap-then-seal that makes a lot of sense is "pledging."
+  // Once JS has granted eval, `surftcl::pledge` could be passed a list of capabilities as arguments,
+  // like so: `surftcl::pledge dom json chan etc`
+  // This command automatically sources the correct versions for these SurfTcl packages,
+  // then seals itself by calling `RevokeEvalPermanently()`.
+  // Pledging with no arguments simply calls `RevokeEvalPermanently()`.
+  //
+  // This mechanism is cribbed entirely from OpenBSD, where "pledge" is a declaration
+  // of all syscalls the program will ever use. Attempting to expand later results in termination.
+  // In our case, non-pledged packages simply become inaccessible.
+  //
+  // `surftcl::pledge eval` should raise an error, directing to the documentation explaining
+  // that eval access must be granted from the JS side, and pledging to use maximum permissions
+  // is equivalent to not pledging at all.
+
   _functions: new Map(),
 
   register(name, fn) {
@@ -181,6 +218,8 @@ export const JsFunctionRegistry = {
   },
 
   revoke(name) {
+    // Revokes a function. Returns 1 if the function was on our side of the registry,
+    // 0 otherwise. It's a number because the WASM side calls this function, too.
     Runtime._revokeJsFn(name);
     if (this._functions.get(name) !== undefined) {
       Module.removeFunction(this._functions.get(name));
@@ -196,6 +235,7 @@ export const JsFunctionRegistry = {
 
   call(fn, argc, argvPtr) {
     /* wraps values returned by functions so that they are readable in Tcl */
+
     // argvPtr points at a contiguous array of i32 C-string pointers in
     // wasm linear memory. Dereference each and decode as UTF-8.
     let args = new Array(argc);
@@ -204,56 +244,110 @@ export const JsFunctionRegistry = {
       args[i] = Module.UTF8ToString(strPtr);
     }
 
-    let r;
+    let ret;
     try {
-      let raw = fn(args);
-      r = this.normalizeResult(raw);
+      ret = fn(args);
     } catch (e) {
-      // DEFER(error handling) differentiate between JS errors and SurfTcl API errors
-      Runtime._setJsResult((e && e.message) ? e.message : String(e));
-      return 1;
+      // DEFER(nested Tcl-Js errors) a special case for handling a TclException
+      // would allow for arbitrarily re-entrant calls to return the entire call stack.
+      let msg;
+      try { msg = `SurfTcl JS call threw ${String(e)}` }
+      catch {
+        msg = `SurfTcl JS call threw a non-serialisable ${Object.prototype.toString.call(e)}`
+      }
+      // DEFER(errorInfo support) Errors may have the propery ".stack", which provides
+      // a stack trace. The format is unspecified, but in general, can be converted into
+      // a helpful string. It is probably a good idea to append it to errorInfo.
+      ret = TclResult.error(msg, {
+        errorCode: ['SURFTCL', 'JS', 'THREW', e.name ?? Object.prototype.toString.call(e)]
+      });
     }
-    Runtime._setJsResult(r.value);
-    if (r.errorCode) {
-      for (let i = 0; i < r.errorCode.length; i++) {
-        Runtime._appendJsErrorCode(r.errorCode[i]);
+
+    try {
+      if (!(ret instanceof TclResult)) ret = TclResult.ok(ret);
+    } catch {
+      ret = TclResult.error("SurfTcl JS call returned non-serializable ${Object.prototype.toString.call(ret)}", {
+        errorCode: ['SURFTCL', 'JS', 'BADTYPE', Object.prototype.toString.call(ret)]
+      });
+    }
+
+    Runtime._setJsResult(ret.value);
+    if (ret.options.errorCode) {
+      for (let i = 0; i < ret.options.errorCode.length; i++) {
+        Runtime._appendJsErrorCode(ret.options.errorCode[i]);
       }
     }
-    return r.code;
+    return ret.code;
   },
 
-  normalizeResult(raw) {
-    // Turns a JS value into an Array which this.call() unpacks into Tcl return values.
-    if (raw === undefined || raw === null) {
-      return { code: 0, value: '', errorCode: null };
+}
+
+export class TclResult {
+  /* TclResult can be used to wrap the returned value of a JS function
+   * for finer control over the state of the Tcl interpreter.
+   * See the "return" Tcl manual page for more information.
+   *
+   * "code" must be a numeric Tcl return code, or one of the following strings:
+   *   "ok"|"error"|"return"|"break"|"continue"
+   *   These have the same meaning as in the Tcl manpage for the "return" command,
+   *   and will be normalized as an integer.
+   *   You don't need to specify a code if you use one of the `TclResult.ok(...)`
+   *   convenience functions.
+   *
+   * "value" will be converted into a string if it is not already, in one of two ways:
+   *   undefined/null  -> ""
+   *   everything else -> String(value). Failure will result in a TypeError.
+   *  NOTE: Objects and arrays of non-strings will not serialize into JSON by default!
+   *  If this is desired, it must be done by the caller.
+   *
+   * "options" may have the following optional parameters:
+   *   errorCode: an Array of strings representing a Tcl error code as described
+   *     in the Tcl manual pages for "throw" and "return".
+   *     If errorCode is undefined/null and this.code is "error" or 1 (TCL_ERROR),
+   *     the errorCode will be ['NONE']. This mirrors Tcl's `error` command.
+   *
+   */
+  static BRAND = Symbol.for("surftcl.result");
+  static CODES = {
+    /* Directly map to Tcl constants */
+    ok: 0,      /* TCL_OK */
+    error: 1,   /* TCL_ERROR */
+    return: 2,  /* TCL_RETURN */
+    break: 3,   /* TCL_BREAK */
+    continue: 4 /* TCL_CONTINUE */
+  };
+
+  constructor (code, value, options = {}) {
+    try {
+      this.value = (value === null || value === undefined) ? "" : String(value);
+    } catch (e) {
+      throw new TypeError('SurfTcl.TclResult could not serialize a value', { cause: e });
     }
-    if (!Array.isArray(raw)) {
-      return { code: 0, value: String(raw), errorCode: null };
+    this.code = TclResult.getReturnCode(code); /* normalize return code, may throw */
+
+    this.options = options;
+    this.options.errorCode ??= ['NONE'];
+    this[TclResult.BRAND] = true;
+  };
+
+  static getReturnCode(code) {
+    if (typeof code === "number") {
+      if (Number.isInteger(code) && code >= 0) return code;
+      throw new TypeError(`SurfTcl.TclResult: code must be a positive integer, got: ${code}`);
     }
-    if (raw.length !== 2) {
-      throw new Error('surftcl JS bridge: returned array must be [status, value]');
-    }
-    var status = raw[0];
-    var v = raw[1];
-    var valueStr = (v === undefined || v === null) ? '' : String(v);
-    if (typeof status === 'number') {
-      return { code: status | 0, value: valueStr, errorCode: null };
-    }
-    if (typeof status === 'string') {
-      switch (status) {
-        case 'ok':       return { code: 0, value: valueStr, errorCode: null };
-        case 'error':    return { code: 1, value: valueStr, errorCode: null };
-        case 'return':   return { code: 2, value: valueStr, errorCode: null };
-        case 'break':    return { code: 3, value: valueStr, errorCode: null };
-        case 'continue': return { code: 4, value: valueStr, errorCode: null };
-        default:         return { code: 1, value: valueStr, errorCode: [status] };
-      }
-    }
-    if (Array.isArray(status)) {
-      return { code: 1, value: valueStr, errorCode: status.map(String) };
-    }
-    throw new Error('surftcl JS bridge: status must be a number, string, or string array');
-  },
+    if (code in TclResult.CODES) return TclResult.CODES[code];
+    throw new TypeError(`SurfTcl.TclResult: unknown return code: ${code}`);
+  }
+
+  static ok(value, options)       { return new TclResult("ok",       value, options); };
+  static error(value, options)    { return new TclResult("error",    value, options); };
+  static return(value, options)   { return new TclResult("return",   value, options); };
+  static break(value, options)    { return new TclResult("break",    value, options); };
+  static continue(value, options) { return new TclResult("continue", value, options); };
+
+  static [Symbol.hasInstance](x) {
+    return x != null && x[TclResult.BRAND] === true;
+  }
 }
 
 // -------------------------------------------------------------------------
@@ -282,7 +376,7 @@ Module['postRun'] = () => {
         let trace = Runtime._getStringResult(interp);
         Runtime._eval(interp, 'set ::errorCode');
         let code = Runtime._getStringResult(interp);
-        throw new TclException(code, msg, trace);
+        throw new TclException(code, msg, trace, { cause: script });
       }
       return Runtime._getStringResult(interp);
     },
@@ -295,9 +389,11 @@ Module['postRun'] = () => {
 
     GrantEval() {
       // Grants `surftcl::js::call eval` privileges to the interpreter.
-      // scoped to this module such that `surftcl` is bound to the runtime after
-      // initialisation and globalThis refers to the SurfTcl module, not the page.
-      // TODO(dther) The scoping is potentially surprising. I need to document it,
+      // scoped such that `this` and `surftcl` are bound to the runtime after
+      // initialisation, and anything in this module is accessible.
+
+      // TODO(dther) The scoping is potentially surprising. It also prevents
+      // the accumulation of state by default. I need to document it,
       // and explain the escape hatch: `(0, eval)(...)`
       let surftcl = this;
       this.js.register("eval", (args) => {

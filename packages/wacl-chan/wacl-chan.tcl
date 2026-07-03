@@ -1,3 +1,14 @@
+# FIXME(dther) ... What the hell?? This is huge!
+# It's an entire re-implementation of a channel on the JS side!
+# I thought it was a thin wrapper, not an entire FIFO abstraction!
+#
+# Looking at it a little closer, it looks like some of the bulk
+# stems from the fact that re-entrant evaluations weren't allowed
+# in the earlier versions. Hmm.
+#
+# Yeah, this is going to need to be reworked heavily.
+# Possibly in the core code, partially in C.
+
 # surftcl::chan — bidirectional binary bytestreams between Tcl and JS,
 # implemented as Tcl reflected channels (`chan create`). The channel
 # behaves exactly like any other Tcl channel: puts/read/gets work,
@@ -40,7 +51,7 @@
 #
 # The JS-side write defers its `chan postevent` via setTimeout(0). DOM
 # event handlers (and anything else that might call write inside an
-# ongoing surftcl.Eval frame) would otherwise trip the re-entrant
+# ongoing this.Eval frame) would otherwise trip the re-entrant
 # Tcl_Eval fence; the setTimeout trampolines past the current Tcl
 # stack the same way `after 0 [list ...]` does Tcl-side.
 
@@ -112,10 +123,10 @@ namespace eval ::surftcl::chan {
                                 rec.posted = false;
                                 if (rec.closed) return;
                                 try {
-                                    surftcl.Eval(
+                                    this.Eval(
                                         "chan postevent " + rec.tclName + " read");
                                 } catch (e) {
-                                    surftcl.onError("chan postevent", e);
+                                    this.onError("chan postevent", e);
                                 }
                             }, 0);
                         }
@@ -124,7 +135,7 @@ namespace eval ::surftcl::chan {
                         if (rec.closed) return;
                         rec.closed = true;
                         setTimeout(function () {
-                            try { surftcl.Eval("close " + rec.tclName); }
+                            try { this.Eval("close " + rec.tclName); }
                             catch (e) { /* may already be closed */ }
                         }, 0);
                     }
@@ -135,10 +146,10 @@ namespace eval ::surftcl::chan {
     }
     var C = globalThis.__surftclChan;
 
-    surftcl.js.register("__surftcl_chan_create", function (args) {
+    this.js.register("__surftcl_chan_create", function (args) {
         var name = args[0];
         if (C.byName[name]) {
-            return [["SURFTCL", "CHAN", "EXISTS"], "channel already open: " + name];
+            return TclResult.error("channel already open: " + name, { errorCode: ["SURFTCL", "CHAN", "EXISTS"] });
         }
         var handle = "wc" + (++C.counter);
         C.byName[name] = {
@@ -157,15 +168,15 @@ namespace eval ::surftcl::chan {
         return handle;
     });
 
-    surftcl.js.register("__surftcl_chan_attach", function (args) {
+    this.js.register("__surftcl_chan_attach", function (args) {
         var handle = args[0], tclName = args[1];
         var rec = C.byName["__h_" + handle];
-        if (!rec) return [["SURFTCL", "CHAN", "NOHANDLE"], "no such chan handle"];
+        if (!rec) return TclResult.error("no such chan handle", { errorCode: ["SURFTCL", "CHAN", "NOHANDLE"] });
         rec.tclName = tclName;
         return "";
     });
 
-    surftcl.js.register("__surftcl_chan_close", function (args) {
+    this.js.register("__surftcl_chan_close", function (args) {
         var rec = C.byName["__h_" + args[0]];
         if (!rec) return "";
         rec.closed = true;
@@ -174,7 +185,7 @@ namespace eval ::surftcl::chan {
         return "";
     });
 
-    surftcl.js.register("__surftcl_chan_watch", function (args) {
+    this.js.register("__surftcl_chan_watch", function (args) {
         var rec = C.byName["__h_" + args[0]];
         if (!rec) return "";
         rec.watching = (args[1].indexOf("read") >= 0);
@@ -185,14 +196,14 @@ namespace eval ::surftcl::chan {
             setTimeout(function () {
                 rec.posted = false;
                 if (rec.closed) return;
-                try { surftcl.Eval("chan postevent " + rec.tclName + " read"); }
-                catch (e) { surftcl.onError("chan postevent", e); }
+                try { this.Eval("chan postevent " + rec.tclName + " read"); }
+                catch (e) { this.onError("chan postevent", e); }
             }, 0);
         }
         return "";
     });
 
-    surftcl.js.register("__surftcl_chan_read", function (args) {
+    this.js.register("__surftcl_chan_read", function (args) {
         var rec = C.byName["__h_" + args[0]];
         var count = parseInt(args[1], 10);
         if (!rec || rec.pendingLen === 0) return "";
@@ -217,7 +228,7 @@ namespace eval ::surftcl::chan {
                 setTimeout(function () {
                     rec.posted = false;
                     if (rec.closed) return;
-                    try { surftcl.Eval("chan postevent " + rec.tclName + " read"); }
+                    try { this.Eval("chan postevent " + rec.tclName + " read"); }
                     catch (e) {}
                 }, 0);
             }
@@ -225,14 +236,14 @@ namespace eval ::surftcl::chan {
         return C.bytesToStr(chunk);
     });
 
-    surftcl.js.register("__surftcl_chan_write", function (args) {
+    this.js.register("__surftcl_chan_write", function (args) {
         var rec = C.byName["__h_" + args[0]];
-        if (!rec) return [["SURFTCL", "CHAN", "NOHANDLE"], "no such chan handle"];
-        if (rec.closed) return [["SURFTCL", "CHAN", "CLOSED"], "channel closed"];
+        if (!rec) return TclResult.error("no such chan handle", { errorCode: ["SURFTCL", "CHAN", "NOHANDLE"] });
+        if (rec.closed) return TclResult.error("channel closed", { errorCode: ["SURFTCL", "CHAN", "CLOSED"] });
         var bytes = C.strToBytes(args[1]);
         if (rec.onData) {
             try { rec.onData(bytes); }
-            catch (e) { surftcl.onError("chan onData", e); }
+            catch (e) { this.onError("chan onData", e); }
         }
         return String(bytes.length);
     });
@@ -295,4 +306,4 @@ proc ::surftcl::chan::names {} {
     return [array names byName]
 }
 
-package provide surftcl::chan 1.0
+package provide surftcl::chan 0.0

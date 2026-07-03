@@ -51,16 +51,18 @@ namespace eval ::surftcl::json {
 }
 
 ::surftcl::js::call eval {
-    surftcl.js.register("__surftcl_json_get", function (args) {
+    this.js.register("__surftcl_json_get", function (args) {
         var blob = args[0];
         var path = args.slice(1);
         var cur;
         try { cur = JSON.parse(blob); }
-        catch (e) { return [["JSON", "PARSE"], "json::get: " + e.message]; }
+        catch (e) {
+            return TclResult.error("json::get: " + e.message, { errorCode: ["JSON", "PARSE"] });
+        }
         for (var i = 0; i < path.length; i++) {
             if (cur === null || typeof cur !== "object" || !(path[i] in cur)) {
-                return [["JSON", "BAD_PATH"],
-                        "json::get: no such path: " + JSON.stringify(path.slice(0, i + 1))];
+                return TclResult.error("json::get: no such path: " + JSON.stringify(path.slice(0, i + 1)),
+                    { errorCode: ["JSON", "BAD_PATH"] });
             }
             cur = cur[path[i]];
         }
@@ -68,27 +70,32 @@ namespace eval ::surftcl::json {
         if (typeof cur === "object") return JSON.stringify(cur);
         return String(cur);
     });
-    surftcl.js.register("__surftcl_json_extract", function (args) {
+    this.js.register("__surftcl_json_extract", function (args) {
         var blob = args[0];
         var path = args.slice(1);
         var cur;
         try { cur = JSON.parse(blob); }
-        catch (e) { return [["JSON", "PARSE"], "json::extract: " + e.message]; }
+        catch (e) {
+            return TclResult.error("json::extract: " + e.message, { errorCode: ["JSON", "PARSE"] });
+        }
         for (var i = 0; i < path.length; i++) {
             if (cur === null || typeof cur !== "object" || !(path[i] in cur)) {
-                return [["JSON", "BAD_PATH"],
-                        "json::extract: no such path: " + JSON.stringify(path.slice(0, i + 1))];
+                return TclResult.error("json::extract: no such path: " + JSON.stringify(path.slice(0, i + 1)),
+                    { errorCode: ["JSON", "BAD_PATH"] });
             }
             cur = cur[path[i]];
         }
         return JSON.stringify(cur);
     });
-    surftcl.js.register("__surftcl_json_exists", function (args) {
+    this.js.register("__surftcl_json_exists", function (args) {
         var blob = args[0];
         var path = args.slice(1);
         var cur;
         try { cur = JSON.parse(blob); }
-        catch (e) { return [["JSON", "PARSE"], "json::exists: " + e.message]; }
+        catch (e) {
+             return TclResult.error("json::exists: " + e.message,
+                 { errorCode: ["JSON", "PARSE"] });
+        }
         for (var i = 0; i < path.length; i++) {
             if (cur === null || typeof cur !== "object") return "0";
             if (!(path[i] in cur)) return "0";
@@ -110,4 +117,4 @@ proc ::surftcl::json::exists {blob args} {
     ::surftcl::js::call __surftcl_json_exists $blob {*}$args
 }
 
-package provide surftcl::json 1.0
+package provide surftcl::json 0.0

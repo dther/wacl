@@ -161,7 +161,7 @@ namespace eval ::surftcl::dom {
         try {
             elt = D.resolveSel(selector);
         } catch (e) {
-            if (e.__surftclCode) return [e.__surftclCode, e.message];
+            if (e.__surftclCode) return TclResult.error(e.message, { errorCode: e.__surftclCode });
             throw e;
         }
         var handle = "wd" + (++D.counter);
@@ -218,14 +218,13 @@ namespace eval ::surftcl::dom {
             for (var i = 0; i < parts.length - 1; i++) {
                 obj = obj[parts[i]];
                 if (obj === null || obj === undefined) {
-                    return [["SURFTCL", "DOM", "NOPATH"],
-                            "no such property path: " + args[1]];
+                    return TclResult.error("no such property path: " + args[1], { errorCode: ["SURFTCL", "DOM", "NOPATH"] });
                 }
             }
             obj[parts[parts.length - 1]] = args[2];
             return "";
         } catch (e) {
-            if (e.__surftclCode) return [e.__surftclCode, e.message];
+            if (e.__surftclCode) return TclResult.error(e.message, { errorCode: e.__surftclCode });
             throw e;
         }
     });
@@ -240,7 +239,7 @@ namespace eval ::surftcl::dom {
             elt.style.setProperty(args[1], args[2]);
             return "";
         } catch (e) {
-            if (e.__surftclCode) return [e.__surftclCode, e.message];
+            if (e.__surftclCode) return TclResult.error(e.message, { errorCode: e.__surftclCode });
             throw e;
         }
     });
@@ -256,18 +255,16 @@ namespace eval ::surftcl::dom {
             for (var i = 0; i < parts.length - 1; i++) {
                 receiver = receiver[parts[i]];
                 if (receiver === null || receiver === undefined) {
-                    return [["SURFTCL", "DOM", "NOPATH"],
-                            "no such method path: " + path];
+                    return TclResult.error("no such method path: " + path, { errorCode: ["SURFTCL", "DOM", "NOPATH"] });
                 }
             }
             var fn = receiver[parts[parts.length - 1]];
             if (typeof fn !== "function") {
-                return [["SURFTCL", "DOM", "NOPATH"],
-                        "not a method: " + path];
+                return TclResult.error("not a method: " + path, { errorCode: ["SURFTCL", "DOM", "NOPATH"] });
             }
             return D.serialize(fn.apply(receiver, methodArgs));
         } catch (e) {
-            if (e.__surftclCode) return [e.__surftclCode, e.message];
+            if (e.__surftclCode) return TclResult.error(e.message, { errorCode: e.__surftclCode });
             throw e;
         }
     });
@@ -280,7 +277,7 @@ namespace eval ::surftcl::dom {
             elt.innerHTML = args[1];
             return "";
         } catch (e) {
-            if (e.__surftclCode) return [e.__surftclCode, e.message];
+            if (e.__surftclCode) return TclResult.error(e.message, { errorCode: e.__surftclCode });
             throw e;
         }
     });
@@ -293,7 +290,7 @@ namespace eval ::surftcl::dom {
             elt.textContent = args[1];
             return "";
         } catch (e) {
-            if (e.__surftclCode) return [e.__surftclCode, e.message];
+            if (e.__surftclCode) return TclResult.error(e.message, { errorCode: e.__surftclCode });
             throw e;
         }
     });
@@ -309,7 +306,7 @@ namespace eval ::surftcl::dom {
             elt.insertAdjacentHTML(args[1], args[2]);
             return "";
         } catch (e) {
-            if (e.__surftclCode) return [e.__surftclCode, e.message];
+            if (e.__surftclCode) return TclResult.error(e.message, { errorCode: e.__surftclCode });
             throw e;
         }
     });
@@ -321,7 +318,7 @@ namespace eval ::surftcl::dom {
             elt.remove();
             return "";
         } catch (e) {
-            if (e.__surftclCode) return [e.__surftclCode, e.message];
+            if (e.__surftclCode) return TclResult.error(e.message, { errorCode: e.__surftclCode });
             throw e;
         }
     });
@@ -344,8 +341,7 @@ namespace eval ::surftcl::dom {
         var D = globalThis.__surftclDom;
         var list = D.queryLists[args[0]];
         if (!list) {
-            return [["SURFTCL", "DOM", "NOHANDLE"],
-                    "no such query list: " + args[0]];
+            return TclResult.error("no such query list: " + args[0], { errorCode: ["SURFTCL", "DOM", "NOHANDLE"] });
         }
         D.currentElement = list[parseInt(args[1], 10)];
         return "";
@@ -453,4 +449,4 @@ proc ::surftcl::dom::each {sel body} {
     return $count
 }
 
-package provide surftcl::dom 1.0
+package provide surftcl::dom 0.0
