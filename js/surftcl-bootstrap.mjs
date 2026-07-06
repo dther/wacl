@@ -186,6 +186,9 @@ export const JsFunctionRegistry = {
    * ecosystem already. The bridge moves strings.
    */
 
+  // DEFER(interpreter semantics) In keeping with Tcl's philosophy of "interpreters share nothing by default,"
+  // the JS function registry should be per-interpreter, right? I think so, at least.
+
   // DEFER(pledge) A wrapper around bootstrap-then-seal that makes a lot of sense is "pledging."
   // Once JS has granted eval, `surftcl::pledge` could be passed a list of capabilities as arguments,
   // like so: `surftcl::pledge dom json chan etc`
@@ -248,19 +251,28 @@ export const JsFunctionRegistry = {
     try {
       ret = fn(args);
     } catch (e) {
-      // DEFER(nested Tcl-Js errors) a special case for handling a TclException
+      // DEFER(nested Tcl-Js errors) a special case for handling a TclException that preserves errorInfo
       // would allow for arbitrarily re-entrant calls to return the entire call stack.
-      let msg;
-      try { msg = `SurfTcl JS call threw ${String(e)}` }
-      catch {
-        msg = `SurfTcl JS call threw a non-serialisable ${Object.prototype.toString.call(e)}`
+      if (e instanceof TclResult) {
+        // thrown TclResults should be caught and used, I think.
+        // They signal, "I want this result to be returned immediately."
+        // They probably shouldn't be used to return regular results,
+        // but they make sense for TCL_ERROR and TCL_BREAK.
+        ret = e;
+      } else {
+        let msg;
+        try { msg = `SurfTcl JS call threw ${String(e)}` }
+        catch {
+          msg = `SurfTcl JS call threw a non-serialisable ${Object.prototype.toString.call(e)}`
+        }
+
+        // DEFER(errorInfo support) Errors may have the propery ".stack", which provides
+        // a stack trace. The format is unspecified, but in general, can be converted into
+        // a helpful string. It is probably a good idea to append it to errorInfo.
+        ret = TclResult.error(msg, {
+          errorCode: ['SURFTCL', 'JS', 'THREW', e.name ?? Object.prototype.toString.call(e)]
+        });
       }
-      // DEFER(errorInfo support) Errors may have the propery ".stack", which provides
-      // a stack trace. The format is unspecified, but in general, can be converted into
-      // a helpful string. It is probably a good idea to append it to errorInfo.
-      ret = TclResult.error(msg, {
-        errorCode: ['SURFTCL', 'JS', 'THREW', e.name ?? Object.prototype.toString.call(e)]
-      });
     }
 
     try {
@@ -277,6 +289,9 @@ export const JsFunctionRegistry = {
         Runtime._appendJsErrorCode(ret.options.errorCode[i]);
       }
     }
+
+    // DEFER(errorInfo support) how __should__ we support errorInfo? Append-only? I think append-only.
+    // See Tcl_AddErrorInfo.
     return ret.code;
   },
 
@@ -395,14 +410,42 @@ Module['postRun'] = () => {
       // TODO(dther) The scoping is potentially surprising. It also prevents
       // the accumulation of state by default. I need to document it,
       // and explain the escape hatch: `(0, eval)(...)`
-      let surftcl = this;
+      let surftcl = this; // TODO(dther) remove this. The canonical way to access the runtime is "this".
       this.js.register("eval", (args) => {
+        // TODO(dther) I'm still of two minds regarding "this" referring to the runtime.
+        // It would be better for it to refer to the currently executing interpreter.
+        // Really, the registry should be per-interpreter.
         let r = eval(args[0]);
         if (r === undefined) return "";
         if (typeof r === "object") return JSON.stringify(r);
         return String(r);
       });
     },
+    // DEFER(better packaging) Right now, the blessed way to load JS code is
+    // to just eval it directly. This is known as "bad practice" in general JS,
+    // but is genuinely fine here, since our trust surface is "loaded as a zip file,
+    // and therefore has access to the JS source code and the host's content policy."
+    //
+    // At some point, it would be better to have a mechanism built around a command
+    // (let's say, `surftcl::js::source` or `require` or `import` or `load`)
+    // that inlines a .js file when it can, but opts instead to retrieve the file
+    // as an ES6 module when it can't. "When it can't" in this case means
+    // "pages which disallow unsafe-eval in their Content-Security-Policy header."
+    // Since SurfTcl is primarily meant to be used by single developers who can decide their
+    // CSP, this is currently fine, but it locks out using SurfTcl on, say,
+    // a web host which declares that no unsafe evals can occur inside any script.
+    //
+    // ES6 modules are robust and continue working in this situation, but are built around
+    // browser assumptions that make them awkward to use as a packaging system for SurfTcl.
+    //
+    // We can't inline the `export` keyword because it doesn't exist in regular JS,
+    // but a .js with no exports is a module with no external namespace, so the only route
+    // is through a global that we'd probably name `globalThis.SurfTclPackageRegistry` or something.
+    //
+    // Bigger issue: ES6 modules need to be real files. They can't be in a ZipFS.
+    // As a result, the "A zip file is all you need for both Web and Desktop" story stops working here.
+    // I don't want the inconvenient case to be the default case, so I'm deciding that this
+    // isn't a priority until users begin requesting it.
 
     RevokeEval() { this.js.revoke("eval") },
     RevokeEvalPermanently() {
