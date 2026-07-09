@@ -1,9 +1,13 @@
 *.tar.gz
 *.zip
 *.data
+*.o
 preGeneratedJs.js
 wacl.js
 wacl.wasm
+wacl-minimal.js
+wacl-minimal.wasm
 /jsbuild/
 /library/
 /tcl/
+/tcl9-spike/

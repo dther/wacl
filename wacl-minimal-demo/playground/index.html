@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>surftcl playground — DOM from Tcl</title>
+
+<!--
+  The playground sits one directory below the surftcl artifacts. Adjust the
+  AMD shim's require.toUrl so it finds wacl.wasm via the symlink at
+  ../wacl.wasm. Everything else in the page (package fetches, etc.) uses
+  explicit `../` prefixes.
+-->
+
+<style>
+:root {
+  --bg:        #0e0e1a;
+  --panel:     #1a1a2e;
+  --panel-lit: #252540;
+  --edge:      #2f2f4a;
+  --text:      #e8e8e8;
+  --muted:     #8a8aa0;
+  --accent:    oklch(0.7 0.2 350);
+  --accent-2:  oklch(0.85 0.15 195);
+  --warn:      oklch(0.75 0.18 30);
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 ui-sans-serif, system-ui, sans-serif;
+  overflow: hidden;
+}
+
+/* The app is a CSS grid. Header on top, sandbox and editor side-by-side,
+   examples ribbon at the bottom. Resize-friendly down to about 800px wide.
+
+   The middle row uses `minmax(0, 1fr)` rather than the obvious `1fr`
+   because CSS Grid's default minimum track size is `auto` (the min-
+   content of the row's items), not 0. Without the explicit `0` floor,
+   the output <pre> filling up would push the row past the viewport and
+   shove the Run button off the bottom of the page. Same trick applies
+   nested below in `.right`. */
+.app {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-columns: 1fr 1fr;
+  grid-template-areas:
+    "header header"
+    "sandbox right"
+    "examples examples";
+  height: 100vh;
+  gap: 1px;
+  background: var(--edge);
+}
+
+header {
+  grid-area: header;
+  background: var(--panel);
+  padding: 0.6rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+header h1 { margin: 0; font-size: 1rem; font-weight: 600; }
+header .muted { color: var(--muted); font-size: 0.85rem; }
+header code {
+  background: var(--bg);
+  padding: 0.1em 0.4em;
+  border-radius: 3px;
+  font-size: 0.85em;
+}
+header .links {
+  margin-left: auto;
+  display: flex;
+  gap: 1rem;
+}
+header a { color: var(--accent-2); text-decoration: none; }
+header a:hover { color: var(--accent); }
+
+/* Sandbox. Cards and a task list are the two manipulables. */
+.sandbox {
+  grid-area: sandbox;
+  background: var(--panel);
+  padding: 1rem;
+  overflow: auto;
+}
+.sandbox h2 {
+  margin: 0 0 0.5rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+/* Each card has a --hue custom property the Tcl side can vary. Using
+   oklch keeps perceptual lightness consistent as the hue cycles. */
+.card {
+  --hue: 0;
+  aspect-ratio: 1;
+  background: oklch(0.3 0.05 var(--hue));
+  border: 1px solid oklch(0.45 0.07 var(--hue));
+  border-radius: 0.5rem;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 1.3rem;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.35s, border-color 0.35s, color 0.35s,
+              transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1),
+              opacity 0.35s;
+}
+.card:hover {
+  border-color: var(--accent);
+}
+.card.lit {
+  background: oklch(0.7 0.18 var(--hue));
+  border-color: oklch(0.85 0.12 var(--hue));
+  color: oklch(0.15 0.06 var(--hue));
+  transform: scale(1.05) rotate(-2deg);
+}
+.card.dim {
+  opacity: 0.25;
+  transform: scale(0.92);
+}
+.card.spin {
+  animation: card-spin 1.4s cubic-bezier(0.4, 0, 0.4, 1) infinite;
+}
+@keyframes card-spin {
+  to { transform: rotateY(360deg); }
+}
+
+.tasks { list-style: none; margin: 0; padding: 0; }
+.tasks li {
+  padding: 0.5rem 0.75rem;
+  background: var(--panel-lit);
+  border-radius: 0.25rem;
+  margin-bottom: 0.25rem;
+  border-left: 3px solid var(--accent);
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+.tasks li.done {
+  text-decoration: line-through;
+  color: var(--muted);
+  border-left-color: var(--muted);
+}
+.tasks li:hover { background: var(--edge); }
+
+/* Right column: editor on top, controls in the middle, output below.
+   The min-height: 0 here is belt-and-suspenders to the minmax(0,1fr)
+   on .app — together they guarantee .right is bounded by its grid
+   row no matter what's inside. */
+.right {
+  grid-area: right;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
+  background: var(--panel);
+  min-height: 0;
+}
+
+.editor {
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.editor h2, .output h2 {
+  margin: 0 0 0.4rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.editor textarea {
+  flex: 1;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--edge);
+  border-radius: 0.25rem;
+  font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  padding: 0.75rem;
+  resize: none;
+  outline: none;
+  tab-size: 4;
+}
+.editor textarea:focus { border-color: var(--accent); }
+
+.controls {
+  padding: 0.5rem;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  background: var(--panel-lit);
+}
+.controls button {
+  background: var(--accent);
+  color: oklch(0.12 0.05 350);
+  border: none;
+  padding: 0.45rem 1rem;
+  border-radius: 0.25rem;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.1s;
+}
+.controls button:hover { filter: brightness(1.12); }
+.controls .hint {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.output {
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.output pre {
+  flex: 1;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  padding: 0.75rem;
+  border: 1px solid var(--edge);
+  border-radius: 0.25rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.output .err   { color: var(--warn); }
+.output .echo  { color: var(--muted); }
+
+.examples {
+  grid-area: examples;
+  background: var(--panel-lit);
+  padding: 0.5rem 1rem;
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.examples .label {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin-right: 0.25rem;
+}
+.examples button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  padding: 0.35rem 0.85rem;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.examples button:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Boot overlay. Drops opacity once the interp is ready. */
+.loading {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  z-index: 100;
+  font-size: 1.1rem;
+  color: var(--muted);
+}
+.loading.gone {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.4s 0.1s, visibility 0s 0.5s;
+}
+.loading .dot { animation: pulse 1.2s ease-in-out infinite; }
+.loading .dot:nth-child(2) { animation-delay: 0.2s; }
+.loading .dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes pulse {
+  0%, 80%, 100% { opacity: 0.2; }
+  40%           { opacity: 1; }
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <header>
+    <h1>surftcl playground</h1>
+    <span class="muted">DOM from Tcl, via <code>::surftcl::dom</code></span>
+    <span class="links">
+      <a href="../">REPL →</a>
+    </span>
+  </header>
+
+  <div class="sandbox" id="sandbox">
+    <h2>Cards</h2>
+    <div class="cards" id="cards"></div>
+    <h2>Tasks</h2>
+    <ul class="tasks" id="tasks">
+      <li>buy milk</li>
+      <li>write a Tk IDE</li>
+      <li>ship the demo</li>
+    </ul>
+  </div>
+
+  <div class="right">
+    <div class="editor">
+      <h2>Editor — Ctrl-Enter to run</h2>
+      <textarea id="editor" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea>
+    </div>
+    <div class="controls">
+      <button id="run">Run</button>
+      <span class="hint">script targets the sandbox above</span>
+    </div>
+    <div class="output">
+      <h2>Output</h2>
+      <pre id="output"></pre>
+    </div>
+  </div>
+
+  <div class="examples" id="examples">
+    <span class="label">Examples:</span>
+    <!-- buttons appended by JS -->
+  </div>
+</div>
+
+<div class="loading" id="loading">
+  loading surftcl<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span>
+</div>
+
+<script type="module">
+"use strict";
+
+const sandboxEl = document.getElementById("sandbox");
+const cardsEl   = document.getElementById("cards");
+const editorEl  = document.getElementById("editor");
+const outputEl  = document.getElementById("output");
+const runBtn    = document.getElementById("run");
+const examplesEl = document.getElementById("examples");
+const loadingEl = document.getElementById("loading");
+
+// Build the 4x4 card grid in JS — easier to seed initial --hue values
+// from here than to write them all out in the HTML.
+for (let i = 1; i <= 16; i++) {
+  const c = document.createElement("div");
+  c.className = "card";
+  c.id = "card-" + i;
+  c.textContent = i;
+  c.style.setProperty("--hue", String((i * 23) % 360));
+  cardsEl.appendChild(c);
+}
+
+function appendOut(text, kind) {
+  const span = document.createElement("span");
+  if (kind) span.className = kind;
+  span.textContent = text;
+  outputEl.appendChild(span);
+  outputEl.scrollTop = outputEl.scrollHeight;
+}
+
+// Each example is a small Tcl script. Clicking a button populates the
+// editor with the script and runs it once — invites editing. Each one
+// stays under ~10 lines so the script-to-effect mapping is obvious.
+const examples = [
+  { name: "light odds", script:
+`# Light up odd-numbered cards using each + :this.
+surftcl::dom each ".card" {
+    if {[surftcl::dom prop :this textContent] % 2} {
+        surftcl::dom call :this classList.add lit
+    } else {
+        surftcl::dom call :this classList.remove lit
+    }
+}` },
+
+  { name: "rainbow hues", script:
+`# Re-assign each card's --hue, walking the colour wheel.
+set i 0
+surftcl::dom each ".card" {
+    surftcl::dom style :this --hue [expr {$i * 23 % 360}]
+    incr i
+}` },
+
+  { name: "spin all", script:
+`# Toggle the .spin animation on every card.
+set state [surftcl::dom prop "#card-1" className]
+set op [expr {[string match *spin* $state] ? "remove" : "add"}]
+surftcl::dom each ".card" {
+    surftcl::dom call :this classList.$op spin
+}` },
+
+  { name: "dim non-primes", script:
+`# Dim every card whose number isn't prime.
+proc prime n {
+    if {$n < 2} { return 0 }
+    for {set i 2} {$i * $i <= $n} {incr i} {
+        if {$n % $i == 0} { return 0 }
+    }
+    return 1
+}
+surftcl::dom each ".card" {
+    set n [surftcl::dom prop :this textContent]
+    if {[prime $n]} {
+        surftcl::dom call :this classList.remove dim
+    } else {
+        surftcl::dom call :this classList.add dim
+    }
+}` },
+
+  { name: "click to toggle", script:
+`# Bind every card's click to a toggle of its lit state.
+# :this in the bind selector means "the iterated each element";
+# :this inside the bound script means "the bound element".
+surftcl::dom each ".card" {
+    surftcl::dom bind :this click {
+        surftcl::dom call :this classList.toggle lit
+    }
+}
+puts "16 cards now respond to clicks"` },
+
+  { name: "add task", script:
+`# Append a task with the current time.
+set t [clock format [clock seconds] -format %H:%M:%S]
+surftcl::dom append "#tasks" "<li>noted at $t</li>"` },
+
+  { name: "insert all four", script:
+`# All four insertAdjacentHTML positions, around #tasks.
+# before  -> previous sibling (needs a parent)
+# prepend -> first child
+# append  -> last child
+# after   -> next sibling (needs a parent)
+surftcl::dom before  "#tasks" "<h3 style='color:var(--accent);margin:0.5rem 0 0'>Today</h3>"
+surftcl::dom prepend "#tasks" "<li class='done'>★ pinned to top</li>"
+surftcl::dom append  "#tasks" "<li>tacked on at end</li>"
+surftcl::dom after   "#tasks" "<p style='color:var(--muted);margin:0.25rem 0'>(noted via surftcl::dom after)</p>"` },
+
+  { name: "strike tasks", script:
+`# Make existing tasks toggle their done state on click.
+surftcl::dom each "#tasks > li" {
+    surftcl::dom bind :this click {
+        surftcl::dom call :this classList.toggle done
+    }
+}` },
+
+  { name: "reset", script:
+`# Clear all the card classes back to default.
+surftcl::dom each ".card" {
+    foreach c {lit dim spin} {
+        surftcl::dom call :this classList.remove $c
+    }
+}` }
+];
+
+import * as surftcl from "../surftcl-bootstrap.mjs"
+  surftcl.onReady(function (interp) {
+    interp.stdout = t => appendOut(t);
+    interp.stderr = t => appendOut(t, "err");
+
+    // The playground is a development surface. We grant `eval` for the
+    // package install and leave it granted so users can poke from the
+    // editor. A real app would `::surftcl::js::revoke eval` after the
+    // requires it cares about — see the REPL demo for the seal flow.
+    interp.js.register("alert", function (args) { window.alert(args.join(" ")); });
+    interp.GrantEval()
+
+    const packageFiles = [
+      "packages/wacl-json/pkgIndex.tcl",
+      "packages/wacl-json/wacl-json.tcl",
+      "packages/wacl-dom/pkgIndex.tcl",
+      "packages/wacl-dom/wacl-dom.tcl",
+    ];
+
+    Promise.all(packageFiles.map((p) =>
+      fetch("../../" + p).then((r) => {
+        if (!r.ok) throw new Error(p + ": " + r.status);
+        return r.text();
+      }).then((body) => {
+        const full = "/" + p;
+        const dir = full.substring(0, full.lastIndexOf("/"));
+        try { interp.Module.FS.mkdirTree(dir); } catch (e) {}
+        interp.Module.FS.writeFile(full, body);
+      })
+    )).then(() => {
+      interp.Eval("lappend auto_path /packages");
+      interp.Eval("package require surftcl::dom");
+
+      // `update` yields to the JS event loop (Asyncify-backed), so editor
+      // code can keep the page live across long work. See the REPL for the
+      // rationale; same six-line wrapper.
+      interp.Eval(`
+        namespace eval ::surftcl::OLD {}
+        rename update ::surftcl::OLD::update
+        proc update {args} { ::surftcl::OLD::update {*}$args; ::surftcl::js::yield }
+      `);
+
+      // Examples ribbon.
+      examples.forEach((ex) => {
+        const b = document.createElement("button");
+        b.textContent = ex.name;
+        b.title = "click to load + run; then edit and Ctrl-Enter";
+        b.onclick = () => {
+          editorEl.value = ex.script;
+          runEditor();
+          editorEl.focus();
+        };
+        examplesEl.appendChild(b);
+      });
+
+      // Seed the editor.
+      editorEl.value = examples[0].script;
+
+      appendOut("ready · Tcl " + interp.Eval("info patchlevel") + "\n", "echo");
+      loadingEl.classList.add("gone");
+    }).catch((e) => {
+      appendOut("package install failed: " + e + "\n", "err");
+      loadingEl.textContent = "load failed — see Output";
+    });
+
+    // EvalAsync: editor code may `update` (yield) — e.g. an animation loop
+    // that wants the page to repaint between steps. Fire-and-forget so the
+    // page stays live while it runs.
+    function runEditor() {
+      const src = editorEl.value;
+      const echo = src.split("\n").map(l => "$ " + l).join("\n");
+      appendOut(echo + "\n", "echo");
+      interp.EvalAsync(src).then((r) => {
+        if (r !== "") appendOut("= " + r + "\n");
+      }).catch((e) => {
+        appendOut((e.errorInfo || String(e)) + "\n", "err");
+      });
+    }
+
+    runBtn.onclick = runEditor;
+    editorEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        runEditor();
+      }
+    });
+
+    window.__interp = interp;
+  });
+</script>
+
+</body>
+</html>

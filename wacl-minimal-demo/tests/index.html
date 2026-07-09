@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>surftcl test runner</title>
+
+<style>
+:root {
+  --bg:        #0e0e1a;
+  --panel:     #1a1a2e;
+  --edge:      #2f2f4a;
+  --text:      #e8e8e8;
+  --muted:     #8a8aa0;
+  --accent:    oklch(0.7 0.2 350);
+  --accent-2:  oklch(0.85 0.15 195);
+  --pass:      oklch(0.78 0.18 145);
+  --fail:      oklch(0.7 0.22 30);
+  --skip:      oklch(0.75 0.12 80);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 ui-sans-serif, system-ui, sans-serif;
+}
+
+.app {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100vh;
+}
+
+header {
+  background: var(--panel);
+  padding: 0.6rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  border-bottom: 1px solid var(--edge);
+}
+header h1 { margin: 0; font-size: 1rem; font-weight: 600; }
+header .muted { color: var(--muted); font-size: 0.85rem; }
+
+/* Status pill — colour shifts on the outcome. */
+#status {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  color: var(--muted);
+}
+#status.running { color: var(--accent-2); border-color: var(--accent-2); }
+#status.passed  { color: var(--pass); border-color: var(--pass); }
+#status.failed  { color: var(--fail); border-color: var(--fail); }
+
+header .links { margin-left: auto; display: flex; gap: 1rem; }
+header a { color: var(--accent-2); text-decoration: none; }
+header a:hover { color: var(--accent); }
+
+/* The log fills the rest of the screen and scrolls. */
+.log-wrap {
+  background: var(--bg);
+  padding: 1rem;
+  overflow: auto;
+  min-height: 0;
+}
+.log {
+  margin: 0;
+  font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* tcltest's natural output uses ++++ for passes, ==== for headers,
+   ---- for failures. We classify the streamed text and paint by mood. */
+.log .err   { color: var(--fail); }
+.log .pass  { color: var(--pass); }
+.log .skip  { color: var(--skip); }
+.log .head  { color: var(--accent-2); }
+
+.loading {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  z-index: 100;
+  color: var(--muted);
+  font-size: 1.05rem;
+}
+.loading.gone {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.4s, visibility 0s 0.5s;
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <header>
+    <h1>surftcl tests</h1>
+    <span class="muted">tcltest, run against the live surftcl runtime</span>
+    <span id="status">loading…</span>
+    <span class="links">
+      <a href="../playground/">playground →</a>
+      <a href="../">REPL →</a>
+    </span>
+  </header>
+  <div class="log-wrap">
+    <pre class="log" id="log"></pre>
+  </div>
+</div>
+
+<div class="loading" id="loading">loading surftcl test environment…</div>
+
+<script>
+"use strict";
+
+const logEl = document.getElementById("log");
+const wrapEl = logEl.parentElement;
+const statusEl = document.getElementById("status");
+const loadingEl = document.getElementById("loading");
+
+// Line-classified append. tcltest writes test outcomes in recognisable
+// prefixes; we lift them to colour without touching the text.
+function classify(text) {
+  if (/^\+\+\+\+/.test(text)) return "pass";
+  if (/^----/.test(text))     return "head";
+  if (/^====/.test(text))     return "head";
+  if (/^---- .* FAILED/.test(text)) return "err";
+  if (/FAILED/.test(text))    return "err";
+  if (/SKIPPED/.test(text))   return "skip";
+  if (/^Test file error/.test(text)) return "err";
+  return null;
+}
+
+// We get bytes byte-by-byte from FS.init via the line-buffered emit,
+// arriving here as text chunks that may include newlines mid-chunk.
+// Split on newlines so the classifier sees one line at a time.
+function appendLog(text, isStderr) {
+  for (const line of text.split(/(?<=\n)/)) {
+    if (line === "") continue;
+    const cls = isStderr ? "err" : classify(line);
+    if (cls) {
+      const span = document.createElement("span");
+      span.className = cls;
+      span.textContent = line;
+      logEl.appendChild(span);
+    } else {
+      logEl.appendChild(document.createTextNode(line));
+    }
+  }
+  wrapEl.scrollTop = wrapEl.scrollHeight;
+}
+
+// Each entry: [URL relative to this page, destination in the in-wasm FS].
+// Packages are first-party source at the repo root, two levels up —
+// ../../packages/... Tests also live at the repo root — ../../tests/...
+// Decoupling source URL from destination path keeps the relative-URL
+// awkwardness from leaking into the source-on-Tcl-side paths.
+const filesToInject = [
+  ["../../packages/wacl-json/pkgIndex.tcl", "/packages/wacl-json/pkgIndex.tcl"],
+  ["../../packages/wacl-json/wacl-json.tcl","/packages/wacl-json/wacl-json.tcl"],
+  ["../../packages/wacl-dom/pkgIndex.tcl",  "/packages/wacl-dom/pkgIndex.tcl"],
+  ["../../packages/wacl-dom/wacl-dom.tcl",  "/packages/wacl-dom/wacl-dom.tcl"],
+  ["../../packages/wacl-chan/pkgIndex.tcl", "/packages/wacl-chan/pkgIndex.tcl"],
+  ["../../packages/wacl-chan/wacl-chan.tcl","/packages/wacl-chan/wacl-chan.tcl"],
+  ["../../tests/all.tcl",                  "/tests/all.tcl"],
+  ["../../tests/wacl-json.test",           "/tests/wacl-json.test"],
+  ["../../tests/wacl-dom.test",            "/tests/wacl-dom.test"],
+  ["../../tests/wacl-chan.test",           "/tests/wacl-chan.test"],
+  ["../../tests/wacl-bridge.test",         "/tests/wacl-bridge.test"],
+];
+
+import("../surftcl-bootstrap.mjs").then((surftcl) => {
+  let interp = surftcl.default;
+    interp.stdout.sink = (t) => appendLog(t, false);
+    interp.stderr.sink = (t) => appendLog(t, true);
+
+    // Grant eval — the packages still need it for their JS shim install.
+    interp.GrantEval();
+
+    function fetchTo([url, dest]) {
+      return fetch(url).then((r) => {
+        if (!r.ok) throw new Error(url + ": HTTP " + r.status);
+        return r.text();
+      }).then((body) => {
+        const dir = dest.substring(0, dest.lastIndexOf("/"));
+        try { interp.Module.FS.mkdirTree(dir); } catch (e) {}
+        interp.Module.FS.writeFile(dest, body);
+      });
+    }
+
+    Promise.all(filesToInject.map(fetchTo)).then(() => {
+      interp.Eval("lappend auto_path /packages");
+      statusEl.textContent = "running…";
+      statusEl.className = "running";
+
+      try {
+        interp.Eval("source /tests/all.tcl");
+        // tcltest tracks totals in ::tcltest::numTests; we deliberately
+        // don't call cleanupTests anywhere so the counts persist past
+        // the source.
+        const total   = +interp.Eval("set ::tcltest::numTests(Total)");
+        const passed  = +interp.Eval("set ::tcltest::numTests(Passed)");
+        const failed  = +interp.Eval("set ::tcltest::numTests(Failed)");
+        const skipped = +interp.Eval("set ::tcltest::numTests(Skipped)");
+        statusEl.textContent =
+          `${passed} passed · ${failed} failed · ${skipped} skipped (${total})`;
+        statusEl.className = failed > 0 ? "failed" : "passed";
+      } catch (e) {
+        statusEl.textContent = "harness error";
+        statusEl.className = "failed";
+        appendLog((e.errorInfo || String(e)) + "\n", true);
+      }
+    }).catch((e) => {
+      appendLog("fetch failed: " + e + "\n", true);
+      statusEl.textContent = "fetch failed";
+      statusEl.className = "failed";
+    }).finally(() => {
+      // Dismiss the loading overlay regardless of outcome. If it
+      // stayed up on failure, the status pill would update with an
+      // error message *behind* the overlay and the page would look
+      // stuck on "loading…" with no visible reason.
+      loadingEl.classList.add("gone");
+    });
+
+    window.__interp = interp;
+  });
+</script>
+
+</body>
+</html>

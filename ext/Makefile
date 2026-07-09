@@ -1,89 +1,49 @@
-TDOMVERSION=0.9.6
-TCLLIBVERSION=1.18
-RLJSONVERSION=0.9.7
+# ext/ — the package build pipeline.
+#
+# Turns first-party package source under ../packages/ into per-package
+# release zips under build/. A zip is the distribution unit: mount it
+# with `tcl::zipfs::mount` (or, once the JS bridge exposes it,
+# `surftcl::mount`) and add the mountpoint to auto_path. This mirrors
+# the zipfs packaging philosophy in CLAUDE.md — one artifact per
+# package, no resolver, the release page is the index.
+#
+# Layout of an artifact: wacl-json.zip contains
+#   wacl-json/pkgIndex.tcl
+#   wacl-json/wacl-json.tcl
+# i.e. the package directory sits at the zip root, so a consumer mounts
+# the zip at any point M and `lappend auto_path M` finds the package in
+# its wacl-json/ subdirectory — exactly how a plain on-disk auto_path
+# directory works.
+#
+# Vendored tcllib modules will land here too, sliced on tcllib's own
+# module boundaries (each subdir already ships a pkgIndex.tcl). That
+# machinery is identical to the per-package rule below; it's just a
+# matter of unpacking the tcllib tarball and pointing the same zip step
+# at modules/<name>/. Not wired yet — see CLAUDE.md's punted list.
 
-BUILDDIR=../jsbuild
-LIBRARYDIR=../library
+PKGDIR = ../packages
+BUILD  = build
 
-BCFLAGS?=-Oz -s WASM=1
+# Every wacl-* directory under ../packages/ is a buildable package.
+PKGS = $(notdir $(wildcard $(PKGDIR)/wacl-*))
 
-TCLLIBS= {json,ncgi,fileutil,cmdline,uri,html,javascript}
+.PHONY: all packages clean
+all: packages
 
-.PHONY: tdom
+packages: $(PKGS:%=$(BUILD)/%.zip)
 
-tdom:
-	cd tdom && emmake make -j
+# One rule per package, generated so each zip depends on exactly the
+# files in its source directory (edit any of them and the zip rebuilds).
+# zip is run from inside PKGDIR so the archive entries are
+# `wacl-<name>/...` rather than `../packages/wacl-<name>/...`; the output
+# path is made absolute because the recipe has already cd'd away.
+define PKG_RULE
+$(BUILD)/$(1).zip: $(wildcard $(PKGDIR)/$(1)/*)
+	@mkdir -p $(BUILD)
+	@rm -f $$@
+	cd $(PKGDIR) && zip -rq "$(CURDIR)/$$@" $(1)
+endef
+$(foreach p,$(PKGS),$(eval $(call PKG_RULE,$(p))))
 
-tdomconfig:
-	cd tdom && emconfigure ./configure --disable-load --disable-threads --disable-shared \
-		--with-tcl=$(CURDIR)/$(BUILDDIR)/lib/ --prefix=$(CURDIR)/$(BUILDDIR)/lib/
-	cd tdom && sed -i 's/-O2/$(BCFLAGS)/g' Makefile
-
-tdomprep:
-	wget -nc http://tdom.org/downloads/tdom-$(TDOMVERSION)-src.tgz
-	mkdir -p tdom
-	tar -C tdom --strip-components=1 -xf tdom-$(TDOMVERSION)-src.tgz
-	cd tdom && patch --verbose -p1 < ../tdom.patch
-	cd tdom && autoconf
-
-tdompatch:
-	wget -nc https://github.com/downloads/tDOM/tdom/tDOM-$(TDOMVERSION).tgz
-	tar -xzf tDOM-$(TDOMVERSION).tgz
-	rm -rf tdom/{autom4te.cache,configure} tDOM-$(TDOMVERSION)/configure 
-	echo `diff -ruN tDOM-$(TDOMVERSION) tdom > tdom.patch`
-	rm -rf tDOM-$(TDOMVERSION)
-
-tdominstall: tdom
-	cd tdom && make install
-
-tdomclean:
-	cd tdom && make clean
-
-tdomdistclean:
-	if [ -e tdom/Makefile ] ; then cd tdom && make distclean ; fi
-	
-tcllib:
-	mkdir -p $(LIBRARYDIR)
-	cp -rf tcllib-$(TCLLIBVERSION)/modules/$(TCLLIBS) $(LIBRARYDIR)
-	find $(LIBRARYDIR)/$(TCLLIBS) -type f | grep -v tcl$$ | xargs rm -f
-	
-tcllibprep:
-	wget -nc http://prdownloads.sourceforge.net/tcllib/tcllib-$(TCLLIBVERSION).tar.gz
-	tar -xzf tcllib-$(TCLLIBVERSION).tar.gz
-
-rljsoninstall: rljson
-	cd rl_json && make install
-
-rljsonclean:
-	cd rl_json && make clean
-
-rljsondistclean:
-	if [ -e rl_json/Makefile ] ; then cd rl_json && make distclean ; fi
-	
-rljson:
-	cd rl_json && emmake make -j
-	
-rljsonconfig:
-	cd rl_json && emconfigure ./configure --disable-threads --disable-shared \
-		--with-tcl=$(CURDIR)/$(BUILDDIR)/lib/ --prefix=$(CURDIR)/$(BUILDDIR)/ \
-		--exec-prefix=$(CURDIR)/$(BUILDDIR)/
-
-rljsonprep:
-	wget -nc https://github.com/RubyLane/rl_json/archive/$(RLJSONVERSION).zip
-	mkdir rl_json && unzip -o -d /tmp/ $(RLJSONVERSION).zip \
-		&& mv /tmp/rl_json-$(RLJSONVERSION)/* rl_json/ && rm -rf /tmp/rl_json-$(RLJSONVERSION)
-	cd rl_json && patch --verbose -p1 < ../rl_json.patch
-	cd rl_json && autoconf
-
-rljsonpatch:
-	wget -nc https://github.com/RubyLane/rl_json/archive/$(RLJSONVERSION).zip
-	unzip -o $(RLJSONVERSION).zip
-	if [ -e rl_json/Makefile ] ; then cd rl_json && make distclean ; fi
-	rm -rf rl_json/{autom4te.cache,configure} rl_json-$(RLJSONVERSION)/{configure,.gitignore}
-	echo `diff -ruN rl_json-$(RLJSONVERSION) rl_json > rl_json.patch`
-	rm -rf rl_json-$(RLJSONVERSION)
-	
-reset:
-	@read -p "This deletes ./rl_jsontcl, ./tdom, tcllib*, are you sure? Type 'YES I am sure' if so: " P && [ "$$P" = "YES I am sure" ]
-	rm -rf rl_json tdom tcllib-1.18
-	
+clean:
+	rm -rf $(BUILD)
