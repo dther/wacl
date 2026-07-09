@@ -144,7 +144,8 @@ pass; prune entries as they get fixed:
 - **The playground page is broken mid-migration**: it imports the ES6
   module but still calls `surftcl.onReady(...)` (removed — the module's
   default export replaced it) and assigns `interp.stdout = fn`
-  (now `interp.stdout.sink = fn`).
+  (now `interp.stdout.sink = fn`). Fixing it is now a stated priority —
+  dther deferred it until the REPL was reliable, which it now is.
 - **The REPL still installs the `update` → `::surftcl::js::yield`
   wrapper** at boot; `::surftcl::js::yield` no longer exists, so typing
   `update` in the REPL errors. Its console-hint comments also reference
@@ -168,9 +169,6 @@ pass; prune entries as they get fixed:
   surface doesn't work right, yet"); `TclPanic` is a stub (its
   constructor references an undefined variable and the C side never
   throws it).
-- Version strings disagree: the C side `Tcl_PkgProvide`s `surftcl
-  1.0.0`, the module exports `VERSION = '0.0.0'`, the packages provide
-  `0.0`.
 
 ## How the Tcl library gets into the browser
 
@@ -662,7 +660,15 @@ that recipe is currently broken (see Known stale / broken).
   + `GrantEval()`, loose-package fetch into the wasm FS.
 - **`/playground/`** — DOM-from-Tcl playground: 4×4 card grid + task
   list sandbox, Tcl editor, examples ribbon. Modern CSS (Grid, oklch
-  per-card hues, keyframes). Currently broken mid-migration.
+  per-card hues, keyframes). Currently broken mid-migration; fixing it
+  is the stated next priority (see Known stale / broken). Feature-wise
+  it's considered done for the alpha — the next capability step waits
+  on an SDL canvas extension (see the punted list). One accepted ribbon
+  idea for after the fix: a "seal the bridge" example
+  (`::surftcl::js::revoke eval`, then a failing `package require`),
+  with the page stating that un-sealing requires a refresh — only the
+  page's JS could re-grant, so within a page's lifetime the seal is
+  final, and the demo should say so plainly.
 - **`/tests/`** — browser test runner (see Test harness). Works.
 
 ### Detail: the REPL (`index.html`)
@@ -747,6 +753,13 @@ that recipe is currently broken (see Known stale / broken).
   implemented. Do not implement without an explicit ask.
 - **A WebSocket transport** so the same terminal can front a remote
   tclsh. `SurfTclTerminal`'s shape was designed for it.
+- **An SDL canvas extension for Tcl.** The prerequisite for the games
+  tier and the playground's next capability step. The extant SDL Tcl
+  extensions don't fit: they're either complete X emulators (so Tk
+  "just works") or SWIG-generated. It gets written fresh,
+  **desktop-first** — proven as a normal Tcl extension on desktop, then
+  compiled for SurfTcl like any C extension (next entry). Out of scope
+  for the 0.1 alpha.
 - **C extensions via wasm side modules.** Possible in principle —
   Emscripten supports `MAIN_MODULE`/`SIDE_MODULE`, and Tcl's stubs
   table is exactly the right shape — but build-time ABI matching means
@@ -762,6 +775,14 @@ that recipe is currently broken (see Known stale / broken).
 
 ## Conventions
 
+- **Versioning.** The runtime is versioned the Tcl way (`a` = alpha,
+  `b` = beta; see the `package` man page), starting at `0.1a1`.
+  `SURFTCL_VERSION` in `opt/surftcl.h` is the single source of truth:
+  `Tcl_PkgProvide` uses it directly, and the module's `VERSION` export
+  asks the interp at boot (`package provide surftcl`) rather than
+  keeping a copy that can drift. The packages version independently
+  (tentatively semver, as is common for Tcl extensions); `0.0` means
+  "not yet versioned."
 - Work happens on the `claude/<adjective-name>` branch the session
   instructions specify. Never push to master.
 - Commit → push after each working unit; `~/.claude/stop-hook-git-check.sh`
