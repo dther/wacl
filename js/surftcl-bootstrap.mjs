@@ -4,7 +4,6 @@
 // SurfTcl's public JS API.
 
 import createSurfTcl from "./surftcl.mjs"
-export const VERSION = '0.0.0'
 
 // The Module object configures Emscripten glue code,
 // and will be further populated at runtime.
@@ -499,4 +498,8 @@ Module['postRun'] = () => {
 }
 
 await createSurfTcl(Module);
+
+// SURFTCL_VERSION in opt/surftcl.h is the single source of truth;
+// asking the interp avoids keeping a second copy that can drift.
+export const VERSION = Runtime.Eval("package provide surftcl");
 export default Runtime;
