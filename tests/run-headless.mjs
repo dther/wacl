@@ -66,6 +66,7 @@ const testFiles = [
   'tests/wacl-dom.test',
   'tests/wacl-chan.test',
   'tests/wacl-bridge.test',
+  'tests/wacl-stdio.test',
 ];
 for (const p of testFiles) {
   const full = '/' + p;

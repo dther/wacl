@@ -78,9 +78,11 @@ Module.TclPanic = TclPanic;
 const Decoder = new TextDecoder();
 const Encoder = new TextEncoder();
 
-// Stdin queue. Runtime.pushStdin(text) appends; the FS.init input callback
-// drains one byte at a time. Returning null from the callback means EOF —
-// a script that does `gets stdin` with an empty queue gets EOF immediately.
+// Stdin queue. Runtime.stdin.write(text) appends; the FS.init input
+// callback drains one byte at a time. The callback's return value is the
+// whole honesty contract: a byte is data, `undefined` makes Emscripten's
+// device raise EAGAIN (Tcl sees a *blocked* channel — empty but open),
+// and `null` is the real end of the stream, only after close().
 const stdin = {
   queue: [],
   eof: false,
@@ -99,7 +101,7 @@ const stdin = {
 
   _read_callback() {
     // this is to be passed to the Emscripten module
-    if (this.queue.length === 0) return null;
+    if (this.queue.length === 0) return this.eof ? null : undefined;
     return this.queue.shift()
   },
 };

@@ -106,6 +106,15 @@ main(int argc, char** argv)
         printf("Error while calling Tcl_Init: %s", errInfo);
     }
 
+    /*
+     * The stdin device never blocks — an empty queue reads as EAGAIN (see
+     * stdin in js/surftcl-bootstrap.mjs) — and the notifier cannot wait, so
+     * blocking semantics are unsatisfiable on the main thread. Declare the
+     * channel non-blocking so its contract matches its behavior: gets/read
+     * on an empty-but-open queue return nothing with fblocked 1 and eof 0.
+     */
+    Tcl_Eval(mainInterp, "chan configure stdin -blocking 0");
+
     SurfTcl_AppInit(mainInterp);
 
     // TODO(dther) we want to load `main.tcl` if it's present inside the zipfs
