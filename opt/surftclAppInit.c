@@ -83,6 +83,16 @@ main(int argc, char** argv)
     mainInterp = Tcl_CreateInterp();
 
     /*
+     * Make stdin a surftcl channel before anything acquires the Emscripten
+     * fd-0 device (std channels are acquired lazily, so being first is
+     * all it takes). This is what makes `chan event readable stdin` real:
+     * the fd-0 device's watch requests go to the notifier's no-op file
+     * handler stubs, but a surftcl channel delivers readability through
+     * the queued-event path like any other.
+     */
+    SurfTcl_InstallStdChannel();
+
+    /*
      * Tcl 9's standard library lives in a zip file (libtcl9.0.3.zip) which
      * we --embed-file into the Emscripten virtual FS at /lib/tcl.zip. On a
      * native build Tcl finds this automatically via TclZipfs_AppHook because
@@ -105,15 +115,6 @@ main(int argc, char** argv)
         const char* errInfo = Tcl_GetVar(mainInterp, "::errorInfo", TCL_GLOBAL_ONLY);
         printf("Error while calling Tcl_Init: %s", errInfo);
     }
-
-    /*
-     * The stdin device never blocks — an empty queue reads as EAGAIN (see
-     * stdin in js/surftcl-bootstrap.mjs) — and the notifier cannot wait, so
-     * blocking semantics are unsatisfiable on the main thread. Declare the
-     * channel non-blocking so its contract matches its behavior: gets/read
-     * on an empty-but-open queue return nothing with fblocked 1 and eof 0.
-     */
-    Tcl_Eval(mainInterp, "chan configure stdin -blocking 0");
 
     SurfTcl_AppInit(mainInterp);
 

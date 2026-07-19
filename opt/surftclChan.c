@@ -382,6 +382,38 @@ SurfTcl_ChanInit(Tcl_Interp *interp)
     return TCL_OK;
 }
 
+/*
+ * Install a surftcl channel as this thread's stdin, before anything
+ * acquires the Emscripten fd-0 device (std channels are only ever
+ * acquired lazily, so ordering is the whole trick). The channel sits in
+ * the registry under the name "stdin"; Runtime.stdin in the bootstrap is
+ * literally Runtime.chan.attach("stdin"). Text options mirror a terminal
+ * stdin; the core underneath stays byte-oriented. If a script closes
+ * stdin, Tcl falls back to lazily re-acquiring the fd-0 device — whose
+ * honest read callback then reports EOF — rather than exploding.
+ */
+int
+SurfTcl_InstallStdChannel(void)
+{
+    SurfTclChan *rec;
+
+    if (!chanRegistryInited) {
+        Tcl_InitHashTable(&chanRegistry, TCL_STRING_KEYS);
+        chanRegistryInited = 1;
+    }
+    if (LookupChan("stdin") != NULL) {
+        return TCL_ERROR;
+    }
+    rec = CreateChan("stdin", TCL_READABLE);
+    Tcl_SetStdChannel(rec->chan, TCL_STDIN);
+    Tcl_RegisterChannel(NULL, rec->chan);
+    Tcl_SetChannelOption(NULL, rec->chan, "-translation", "auto");
+    Tcl_SetChannelOption(NULL, rec->chan, "-encoding", "utf-8");
+    Tcl_SetChannelOption(NULL, rec->chan, "-buffering", "line");
+    Tcl_SetChannelOption(NULL, rec->chan, "-blocking", "0");
+    return TCL_OK;
+}
+
 /* -------------------------------------------- JS-facing entry points */
 
 int

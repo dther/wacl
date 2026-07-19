@@ -52,14 +52,16 @@ test chan-open-1.4 {the JS side sees the name too} -body {
     close $ch
 } -result true
 
-test chan-names-1.1 {names lists every open channel} -body {
+test chan-names-1.1 {names lists every open channel, stdin included} -body {
+    # stdin appears because it IS a surftcl channel — the C side installs
+    # it at boot (SurfTcl_InstallStdChannel).
     set a [surftcl::chan open n1]
     set b [surftcl::chan open n2]
     lsort [surftcl::chan names]
 } -cleanup {
     close $a
     close $b
-} -result {n1 n2}
+} -result {n1 n2 stdin}
 
 test chan-open-2.1 {double open throws SURFTCL CHAN EXISTS} -setup {
     set ch [surftcl::chan open dup]

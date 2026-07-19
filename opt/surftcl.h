@@ -32,6 +32,7 @@ void SurfTcl_Panic(const char *msg);
  * the JS attach surface (bytes cross as pointer+length).
  */
 int SurfTcl_ChanInit(Tcl_Interp *interp);
+int SurfTcl_InstallStdChannel(void);
 int SurfTcl_ChanWrite(const char *name, const unsigned char *buf, int len);
 int SurfTcl_ChanCloseFromJs(const char *name);
 int SurfTcl_ChanExists(const char *name);

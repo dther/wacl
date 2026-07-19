@@ -67,44 +67,16 @@ Module.TclPanic = TclPanic;
 
 // I/O ------------------------------------------------------------------------
 
-// DEFER(channel rework) Emscripten's stdio devices break many of Tcl's assumptions.
-//   They're never blocking, so `fconfigure` is false by default.
-//   There also isn't a way to convey EOF on emscripten devices.
-//   This isn't so bad for stderr and stdout, but causes issues with stdin,
-//   which can't tell the difference between "no waiting data" and EOF.
-//   `chan eof` will give false reports, and `chan event readable`
-//   won't work as expected.
+// Tcl's stdin is NOT the Emscripten fd-0 device: the C side installs a
+// surftcl channel as stdin before anything acquires fd 0 (see
+// SurfTcl_InstallStdChannel in opt/surftclChan.c), which is what makes
+// `chan eof stdin` honest and `chan event readable stdin` real.
+// Runtime.stdin is that channel's attach surface — write(text)/close().
+// stdout/stderr stay on Emscripten devices below: write-only streams
+// don't suffer the device layer's EOF/EAGAIN conflation.
 
 const Decoder = new TextDecoder();
 const Encoder = new TextEncoder();
-
-// Stdin queue. Runtime.stdin.write(text) appends; the FS.init input
-// callback drains one byte at a time. The callback's return value is the
-// whole honesty contract: a byte is data, `undefined` makes Emscripten's
-// device raise EAGAIN (Tcl sees a *blocked* channel — empty but open),
-// and `null` is the real end of the stream, only after close().
-const stdin = {
-  queue: [],
-  eof: false,
-
-  write(text) {
-    // this is to be used by external code.
-    if (this.eof) throw Error("can't write to stdin after close");
-    const bytes = Encoder.encode(text);
-    for (const b of bytes) this.queue.push(b);
-  },
-
-  close() {
-    // closing prevents future writes, but all enqueued bytes are guaranteed to go through
-    this.eof = true
-  },
-
-  _read_callback() {
-    // this is to be passed to the Emscripten module
-    if (this.queue.length === 0) return this.eof ? null : undefined;
-    return this.queue.shift()
-  },
-};
 
 // I/O sinks. Page can override through `Runtime.stdin = (text) => {...}`.
 // Output is delivered to FS.init per byte (or null for flush). We
@@ -145,13 +117,16 @@ const stderr = {
   sink: (text) => console.log('SurfTcl stderr: ' + text),
 };
 
-// FS.init must be wired in preRun so /dev/stdin, /dev/stdout, /dev/stderr
-// are devices backed by callbacks before main() runs and Tcl opens them.
-// DEFER(channel rework) can we replace these entirely, so that they emit EAGAIN?
+// FS.init must be wired in preRun so /dev/stdout and /dev/stderr are
+// devices backed by callbacks before main() runs and Tcl opens them. The
+// fd-0 device is a stub reporting immediate EOF — Tcl's stdin is the
+// surftcl channel and never reads fd 0; anything else that does (a script
+// closing stdin makes Tcl lazily re-acquire the device) gets a truthful
+// end-of-stream instead of a hang.
 Module['preRun'] = function () {
   Module.FS.init(
+    () => null,
     // bind is necessary because of how the "this" keyword works
-    stdin._read_callback.bind(stdin),
     stdout._write_callback.bind(stdout),
     stderr._write_callback.bind(stderr)
   );
@@ -456,7 +431,6 @@ Module['postRun'] = () => {
     _getInterp:       Module.cwrap('SurfTcl_GetInterp',       'number', []),
     _eval:            Module.cwrap('SurfTcl_Eval',            'number', ['number', 'string']),
 
-    stdin:  stdin,
     stdout: stdout,
     stderr: stderr,
 
@@ -584,6 +558,11 @@ Module['postRun'] = () => {
 
   // Finally, so that we can access this runtime from the WASM side...
   Module['SurfTcl'] = Runtime;
+
+  // Tcl's stdin is the "stdin" surftcl channel (installed C-side before
+  // anything could acquire the fd-0 device); the facade keeps the
+  // historical page-facing shape, write(text) and close().
+  Runtime.stdin = Runtime.chan.attach("stdin");
 }
 
 await createSurfTcl(Module);
