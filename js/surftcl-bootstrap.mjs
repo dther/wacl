@@ -40,19 +40,18 @@ export class TclException extends Error {
 };
 
 export class TclPanic extends Error {
-  /* Errors that unwind the interpreter are Tcl Panics, and are unrecoverable
-   * unless explicity caught and wrapped by the JS runtime.
-   *
-   * The Tcl interpreter may throw this itself as a result of Tcl_Panic.
-   * In that case, the cause will be the string "Tcl_Panic Called".
+  /* A Tcl_Panic surfacing in JS. The C panic proc (SurfTclPanicProc in
+   * opt/surftclAppInit.c) formats the message, reports it through
+   * Runtime.onError, then constructs and throws one of these via
+   * Module.TclPanic — the throw unwinds straight through the wasm frames,
+   * so the interpreter's C stack is abandoned mid-flight. A TclPanic is
+   * therefore unrecoverable: catch it to report, not to resume. Reloading
+   * the page is the recovery path.
    */
-  // TODO (dther) doesn't do anything right now
-  // TODO (dther) special Tcl_Panic handler needs to be set in the C side
   static BRAND = Symbol.for("surftcl.panic");
 
-  constructor (msg, options = { cause: 'unknown' }) {
-    let message = `!! SurfTcl PANIC !! ${panic}\n${options.cause ?? ''}`
-    super(message, options);
+  constructor (msg, options = {}) {
+    super(`!! SurfTcl PANIC !! ${msg}`, options);
     this[TclPanic.BRAND] = true;
   }
 
@@ -60,6 +59,11 @@ export class TclPanic extends Error {
     return x != null && x[TclPanic.BRAND] === true;
   }
 };
+
+// On Module (not just exported) so the C panic proc can reach the class
+// from EM_ASM — assigned before createSurfTcl runs, so even a panic during
+// main() itself surfaces as a TclPanic rather than a bare Error.
+Module.TclPanic = TclPanic;
 
 // I/O ------------------------------------------------------------------------
 

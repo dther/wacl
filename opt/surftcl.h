@@ -23,6 +23,7 @@ int  SurfTcl_RevokeJsFn(const char *name);
 int  SurfTcl_Eval(Tcl_Interp *interp, const char *name);
 void SurfTcl_SetJsResultString(const char *s);
 void SurfTcl_AppendJsErrorCodeElement(const char *s);
+void SurfTcl_Panic(const char *msg);
 
 /*
  * Main-thread event-loop integration (opt/surftclNotifier.c). SurfTcl_InstallNotifier

@@ -239,3 +239,14 @@ SurfTcl_GetStringResult(Tcl_Interp *interp)
 {
     return Tcl_GetString(Tcl_GetObjResult(interp));
 }
+
+/*
+ * A JS-callable funnel into Tcl_Panic, so host-side fatal errors take the
+ * same path as interpreter panics (and the panic surface stays testable
+ * from the harness). Does not return.
+ */
+void
+SurfTcl_Panic(const char *msg)
+{
+    Tcl_Panic("%s", msg);
+}

@@ -47,7 +47,8 @@ SURFTCLEXPORTS = \
         _SurfTcl_RegisterJsFn,\
         _SurfTcl_RevokeJsFn,\
         _SurfTcl_SetJsResultString,\
-        _SurfTcl_AppendJsErrorCodeElement\
+        _SurfTcl_AppendJsErrorCodeElement,\
+        _SurfTcl_Panic\
     "
 
 SURFTCLCC = \
@@ -70,6 +71,7 @@ packages:
 # search the way a shell (or env) does.
 test: minimal packages
 	env node tests/run-headless.mjs
+	env node tests/panic-smoke.mjs
 tcl:
 	wget -nc $(TCLURL)
 	mkdir -p tcl

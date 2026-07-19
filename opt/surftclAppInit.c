@@ -1,12 +1,43 @@
+#include <stdarg.h>
+#include <stdio.h>
 #include <tcl.h>
 #include <emscripten.h>
 #include "surftcl.h"
 
 /*
- * The main interpreter, 
+ * The main interpreter,
  * initialized at startup and returned by SurfTcl_GetMainInterp
  */
 static Tcl_Interp* mainInterp = NULL;
+
+/*
+ * Panic handler. Control must never return to Tcl_Panic — it would fall
+ * through to __builtin_trap and the page would see an opaque wasm abort
+ * ("Aborted()") with the message lost. Instead the EM_ASM throw unwinds
+ * straight through the wasm frames into JS, carrying the message as a
+ * TclPanic (or a plain Error if the module class isn't wired yet). The
+ * abandoned wasm stack means the runtime is dead afterwards: a panic is
+ * unrecoverable by design, and reloading the page is the recovery path.
+ *
+ * The message buffer is static because a panic may be an allocator failing.
+ */
+static void
+SurfTclPanicProc(const char *format, ...)
+{
+    static char msg[1024];
+    va_list args;
+
+    va_start(args, format);
+    vsnprintf(msg, sizeof(msg), format, args);
+    va_end(args);
+
+    EM_ASM({
+        var msg = UTF8ToString($0);
+        var panic = new (Module.TclPanic ?? Error)(msg);
+        try { Module.SurfTcl.onError("panic", panic); } catch (e) {}
+        throw panic;
+    }, msg);
+}
 
 static int
 SurfTcl_AppInit(Tcl_Interp* interp)
@@ -35,10 +66,17 @@ int
 main(int argc, char** argv)
 {
     /*
+     * The panic proc must be installed before Tcl_CreateInterp:
+     * Tcl_SetPanicProc runs Tcl_InitSubsystems, which is the documented
+     * ordering for it.
+     */
+    Tcl_SetPanicProc(SurfTclPanicProc);
+
+    /*
      * Swap in the non-blocking main-thread notifier before anything touches
      * the notifier (it initialises lazily on first use). From here on Tcl
-     * never blocks waiting for an event; the JS side drives servicing via
-     * SurfTcl_ServiceEvents. See opt/waclNotifier.c.
+     * never blocks waiting for an event; the rAF main loop below pumps
+     * Tcl_DoOneEvent. See opt/surftclNotifier.c.
      */
     SurfTcl_InstallNotifier();
 
