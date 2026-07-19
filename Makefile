@@ -2,7 +2,8 @@
 #
 # Targets that matter:
 #   make tcl          download and unpack Tcl 9 source under ./tcl/
-#   make minimal      build wacl-minimal.{js,wasm} and copy them into wacl-minimal-demo/
+#   make minimal      build surftcl.mjs + surftcl.wasm and copy them (with
+#                     js/surftcl-bootstrap.mjs) into wacl-minimal-demo/
 #   make surftcl-demo build the wasm, then copy the demo site (pages, wasm,
 #                     packages, tests) into the surftcl-demo repo
 #   make packages     build the per-package release zips under ext/build/
@@ -89,6 +90,11 @@ tcl/unix/Makefile: tcl
 tcl/unix/libtcl9.0.a: tcl/unix/Makefile
 	cd tcl/unix && emmake make libtcl9.0.a
 
+# Order-only: the opt/ compiles include headers from the Tcl source tree,
+# so on a cold build the tree must be unpacked and configured first. Order-
+# only because a re-download/re-configure shouldn't force .o rebuilds.
+surftcl.o surftclAppInit.o surftclNotifier.o: | tcl/unix/Makefile
+
 surftcl.o: opt/surftcl.c
 	emcc $(SURFTCLCC) -c $^ -o $@
 
@@ -113,14 +119,13 @@ minimal: surftcl.mjs surftcl.wasm js/surftcl-bootstrap.mjs
 # resolve unchanged; a root index.html redirects to wacl-minimal-demo/. The
 # repo is a rebuilt artifact — regenerate and commit it on every change,
 # keeping the wasm out of source-tree history. DEMOREPO is the demo checkout.
-surftcl-demo: wacl-minimal.wasm
+surftcl-demo: minimal
 	mkdir -p $(DEMOREPO)/wacl-minimal-demo/playground \
 	         $(DEMOREPO)/wacl-minimal-demo/tests $(DEMOREPO)/tests
 	cp wacl-minimal-demo/index.html            $(DEMOREPO)/wacl-minimal-demo/
 	cp wacl-minimal-demo/playground/index.html $(DEMOREPO)/wacl-minimal-demo/playground/
 	cp wacl-minimal-demo/tests/index.html      $(DEMOREPO)/wacl-minimal-demo/tests/
-	cp wacl-minimal.js wacl-minimal.wasm       $(DEMOREPO)/wacl-minimal-demo/
-	cp wacl-minimal.wasm                       $(DEMOREPO)/wacl-minimal-demo/wacl.wasm
+	cp surftcl.mjs surftcl.wasm js/surftcl-bootstrap.mjs $(DEMOREPO)/wacl-minimal-demo/
 	rm -rf $(DEMOREPO)/packages && cp -R packages $(DEMOREPO)/packages
 	cp tests/all.tcl tests/wacl-*.test         $(DEMOREPO)/tests/
 	printf '%s\n' \
@@ -138,7 +143,9 @@ surftcl-demo: wacl-minimal.wasm
 	    '</html>' > $(DEMOREPO)/index.html
 
 clean:
-	rm -f *.o wacl-minimal.js wacl-minimal.wasm
+	rm -f *.o surftcl.mjs surftcl.wasm \
+	    wacl-minimal-demo/surftcl.mjs wacl-minimal-demo/surftcl.wasm \
+	    wacl-minimal-demo/surftcl-bootstrap.mjs
 	if [ -e tcl/unix/Makefile ] ; then cd tcl/unix && make clean ; fi
 
 # We don't ever change the Tcl source tarball directly,

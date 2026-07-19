@@ -2,11 +2,11 @@
 *.zip
 *.data
 *.o
-preGeneratedJs.js
-wacl.js
-wacl.wasm
-wacl-minimal.js
-wacl-minimal.wasm
+surftcl.mjs
+surftcl.wasm
+wacl-minimal-demo/surftcl.mjs
+wacl-minimal-demo/surftcl.wasm
+wacl-minimal-demo/surftcl-bootstrap.mjs
 /jsbuild/
 /library/
 /tcl/
