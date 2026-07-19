@@ -88,8 +88,11 @@ re-downloading; `fullclean` removes the tarball too.
 - `make tcl`: download Tcl 9.0.3 source tarball and unpack to `tcl/`.
 - Build requires Emscripten 5.0.2, pending a version bump. Later
   versions are currently untested, but we want to target the latest
-  stable version. emsdk lives at `/opt/emsdk`; source
-  `/opt/emsdk/emsdk_env.sh` before each session's first build.
+  stable version. emsdk location varies by container (`/opt/emsdk`
+  historically; check `which emcc` / look for `emsdk_env.sh`). If it's
+  absent, clone `emscripten-core/emsdk`, `./emsdk install 5.0.2 &&
+  ./emsdk activate 5.0.2` (~a minute on a good pipe). Source
+  `emsdk_env.sh` before each session's first build.
 - `make tcl/unix/Makefile` runs `emconfigure` then sed-patches Tcl's
   generated `Makefile` to:
     1. Add `${ZLIB_INCLUDE}` to `CC_SWITCHES`. Tcl 9 upstream bug — when
@@ -129,33 +132,14 @@ re-downloading; `fullclean` removes the tarball too.
   `wacl-minimal-demo/`) are generated, not committed. The demo site
   carries its own copies in the surftcl-demo repo.
 
-## Known stale / broken (as of the refactor-review pass)
+## Known stale / broken (as of the playground-fix pass)
 
-The refactor outran some of the tree. Verified by source-reading on this
-pass; prune entries as they get fixed:
+The refactor outran some of the tree. Most of the earlier entries were
+fixed on the playground-fix pass (playground page, REPL `update` wrapper
+and console hints, `make surftcl-demo`/`clean`/`.gitignore`,
+`tests/run-headless.mjs` rewritten against the ES6 module,
+`tests/run-async.mjs` deleted). Prune entries as they get fixed:
 
-- **`make surftcl-demo` is broken**: the recipe still depends on
-  `wacl-minimal.wasm` and copies `wacl-minimal.js` — targets that no
-  longer exist. Same for `make clean` (removes only the old artifact
-  names) and the Makefile's header comment. `.gitignore` likewise still
-  lists `wacl-minimal.{js,wasm}` / `wacl.wasm` but not `surftcl.mjs` /
-  `surftcl.wasm` or the copies `make minimal` drops into
-  `wacl-minimal-demo/`, so a build leaves untracked noise.
-- **The playground page is broken mid-migration**: it imports the ES6
-  module but still calls `surftcl.onReady(...)` (removed — the module's
-  default export replaced it) and assigns `interp.stdout = fn`
-  (now `interp.stdout.sink = fn`). Fixing it is now a stated priority —
-  dther deferred it until the REPL was reliable, which it now is.
-- **The REPL still installs the `update` → `::surftcl::js::yield`
-  wrapper** at boot; `::surftcl::js::yield` no longer exists, so typing
-  `update` in the REPL errors. Its console-hint comments also reference
-  `surftcl.pushStdin` (now `interp.stdin.write`) and a global `surftcl`
-  handle (no longer blessed — see the module shape below).
-- **`tests/run-headless.mjs` is dead**: AMD-era loader (reads
-  `wacl-minimal.js`, `onReady`, `interp.stdout =` setters). `make test`
-  is broken until it's rewritten against the ES6 module.
-  **`tests/run-async.mjs` is deader**: it tests `EvalAsync`, yield, and
-  `SurfTcl_ServiceEvents`, all removed — a deletion candidate.
 - **`packages/wacl-chan` JS shims have broken `this` bindings**: the
   rework replaced the `surftcl` global with `this`, but inside the
   `setTimeout` callbacks and the registered plain `function`s `this` is
@@ -532,9 +516,8 @@ use the standard `-body / -result / -returnCodes / -errorCode / -match`
 machinery, which is exactly the shape needed for asserting the
 structured error codes the packages raise.
 
-**The browser runner is currently the only working runner and is
-authoritative.** dther tests against it; all tests are green there as of
-this pass. Status of each:
+**The browser runner is authoritative** — dther tests against it.
+Status of each:
 
   - **`tests/all.tcl`** — driver, still fine. Sources every `*.test` in
     lexical order in *one* interpreter (NOT `tcltest::runAllTests`,
@@ -544,11 +527,15 @@ this pass. Status of each:
     **works** (fixed for the ES6 module in commit "Make the browser
     testing page work again"). Live log streams tcltest's output,
     classified by line prefix and coloured; status pill reports counts.
-  - **`tests/run-headless.mjs`** — CLI runner, **broken** (AMD-era; see
-    Known stale / broken). Untrusted until rewritten against the ES6
-    module. `make test` depends on it.
-  - **`tests/run-async.mjs`** — tested the removed Asyncify surface;
-    dead, deletion candidate.
+  - **`tests/run-headless.mjs`** — CLI runner, **works** (rewritten
+    against the ES6 module on the playground-fix pass: plain `await
+    import` of `wacl-minimal-demo/surftcl-bootstrap.mjs` under node —
+    no vm sandbox, no AMD shim). Loads the packages from the release
+    zips `ext/` builds, so it validates the shipped artifact; `make
+    test` builds both and runs it. The dom suite skips headless via
+    the `dom` constraint, exactly as designed.
+  - `tests/run-async.mjs` tested the removed Asyncify surface and was
+    deleted on the same pass.
 
 Four suites: `wacl-json.test`, `wacl-chan.test`, `wacl-dom.test`, and
 `wacl-bridge.test` (the `::surftcl::js::*` surface itself — re-entrancy
@@ -649,10 +636,11 @@ inconvenient case the default; not a priority until users ask.
 
 Three pages, each self-contained, no framework, loading the ES6 module
 directly. The old jQuery/RequireJS-era demo (`wacl-minimal-demo/wacl/`)
-is deleted. `make surftcl-demo` is supposed to mirror these into the
-separate **surftcl-demo** repo (the GitHub Pages site, `DEMOREPO`
-pointing at the checkout, sibling `../surftcl-demo` by default) — but
-that recipe is currently broken (see Known stale / broken).
+is deleted. `make surftcl-demo` mirrors these into the separate
+**surftcl-demo** repo (the GitHub Pages site, `DEMOREPO` pointing at
+the checkout, sibling `../surftcl-demo` by default): the three pages,
+the built `surftcl.mjs`/`surftcl.wasm`/`surftcl-bootstrap.mjs`, the
+loose packages, and the test files the pages fetch at boot.
 
 - **`/`** (the REPL) — the original Tcl terminal in the browser, and
   the reference for module usage: dynamic `import`, `surftcl.default`
@@ -660,15 +648,15 @@ that recipe is currently broken (see Known stale / broken).
   + `GrantEval()`, loose-package fetch into the wasm FS.
 - **`/playground/`** — DOM-from-Tcl playground: 4×4 card grid + task
   list sandbox, Tcl editor, examples ribbon. Modern CSS (Grid, oklch
-  per-card hues, keyframes). Currently broken mid-migration; fixing it
-  is the stated next priority (see Known stale / broken). Feature-wise
-  it's considered done for the alpha — the next capability step waits
-  on an SDL canvas extension (see the punted list). One accepted ribbon
-  idea for after the fix: a "seal the bridge" example
-  (`::surftcl::js::revoke eval`, then a failing `package require`),
-  with the page stating that un-sealing requires a refresh — only the
-  page's JS could re-grant, so within a page's lifetime the seal is
-  final, and the demo should say so plainly.
+  per-card hues, keyframes). **Works** — migrated to the ES6 module on
+  the playground-fix pass (dynamic `import`, `.sink` wiring, editor
+  runs through the synchronous `Eval`). Feature-wise it's considered
+  done for the alpha — the next capability step waits on an SDL canvas
+  extension (see the punted list). The ribbon ends with the accepted
+  "seal the bridge" example: `::surftcl::js::revoke eval`, then a
+  failing `package require surftcl::json`, with the script's comment
+  saying plainly that only the page's JS could re-grant, so within a
+  page's lifetime the seal is final — refresh to reset.
 - **`/tests/`** — browser test runner (see Test harness). Works.
 
 ### Detail: the REPL (`index.html`)
