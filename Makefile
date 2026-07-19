@@ -64,8 +64,12 @@ default: minimal
 packages:
 	$(MAKE) -C ext
 
+# `env node`, not bare node: emsdk_env.sh puts the emsdk root — which
+# contains a *directory* named node/ — first in PATH, and make's own
+# fast-path exec stops there with EACCES instead of continuing the
+# search the way a shell (or env) does.
 test: minimal packages
-	node tests/run-headless.mjs
+	env node tests/run-headless.mjs
 tcl:
 	wget -nc $(TCLURL)
 	mkdir -p tcl
