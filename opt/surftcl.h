@@ -3,6 +3,14 @@
 
 #include <tcl.h>
 
+/*
+ * The single source of truth for SurfTcl's version, in Tcl's own version
+ * grammar (a = alpha, b = beta; see the `package` man page). Tcl_PkgProvide
+ * uses it directly and the ES6 module derives its VERSION export from the
+ * interp at boot, so nothing else needs updating when this changes.
+ */
+#define SURFTCL_VERSION "0.1a1"
+
 int SurfTcl_Init(Tcl_Interp *interp);
 
 /*
