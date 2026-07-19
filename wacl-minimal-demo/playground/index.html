@@ -6,10 +6,9 @@
 <title>surftcl playground — DOM from Tcl</title>
 
 <!--
-  The playground sits one directory below the surftcl artifacts. Adjust the
-  AMD shim's require.toUrl so it finds wacl.wasm via the symlink at
-  ../wacl.wasm. Everything else in the page (package fetches, etc.) uses
-  explicit `../` prefixes.
+  The playground sits one directory below the surftcl artifacts, so the
+  module import is ../surftcl-bootstrap.mjs and the package fetches use
+  explicit ../../ prefixes back to the repo root.
 -->
 
 <style>
@@ -461,98 +460,108 @@ surftcl::dom each ".card" {
     foreach c {lit dim spin} {
         surftcl::dom call :this classList.remove $c
     }
-}` }
+}` },
+
+  { name: "seal the bridge", script:
+`# Revoke the host-granted eval — the bootstrap-then-seal pattern.
+# Packages already loaded keep working, but no new bridged package
+# can install its shims. Only the page's JS could re-grant, so
+# within this page's lifetime the seal is final: refresh to reset.
+::surftcl::js::revoke eval
+if {[catch {package require surftcl::json} err]} {
+    puts "package require surftcl::json -> $err"
+}
+puts "still granted: [::surftcl::js::names]"` }
 ];
 
-import * as surftcl from "../surftcl-bootstrap.mjs"
-  surftcl.onReady(function (interp) {
-    interp.stdout = t => appendOut(t);
-    interp.stderr = t => appendOut(t, "err");
+import("../surftcl-bootstrap.mjs").then((surftcl) => {
+  const interp = surftcl.default;
 
-    // The playground is a development surface. We grant `eval` for the
-    // package install and leave it granted so users can poke from the
-    // editor. A real app would `::surftcl::js::revoke eval` after the
-    // requires it cares about — see the REPL demo for the seal flow.
-    interp.js.register("alert", function (args) { window.alert(args.join(" ")); });
-    interp.GrantEval()
+  interp.stdout.sink = (t) => appendOut(t);
+  interp.stderr.sink = (t) => appendOut(t, "err");
 
-    const packageFiles = [
-      "packages/wacl-json/pkgIndex.tcl",
-      "packages/wacl-json/wacl-json.tcl",
-      "packages/wacl-dom/pkgIndex.tcl",
-      "packages/wacl-dom/wacl-dom.tcl",
-    ];
+  // The playground is a development surface. We grant `eval` for the
+  // package install and leave it granted so users can poke from the
+  // editor. A real app would `::surftcl::js::revoke eval` after the
+  // requires it cares about — the "seal the bridge" example does exactly
+  // that, live.
+  interp.js.register("alert", function (args) { window.alert(args.join(" ")); });
+  interp.GrantEval();
 
-    Promise.all(packageFiles.map((p) =>
-      fetch("../../" + p).then((r) => {
-        if (!r.ok) throw new Error(p + ": " + r.status);
-        return r.text();
-      }).then((body) => {
-        const full = "/" + p;
-        const dir = full.substring(0, full.lastIndexOf("/"));
-        try { interp.Module.FS.mkdirTree(dir); } catch (e) {}
-        interp.Module.FS.writeFile(full, body);
-      })
-    )).then(() => {
-      interp.Eval("lappend auto_path /packages");
-      interp.Eval("package require surftcl::dom");
+  const packageFiles = [
+    "packages/wacl-json/pkgIndex.tcl",
+    "packages/wacl-json/wacl-json.tcl",
+    "packages/wacl-dom/pkgIndex.tcl",
+    "packages/wacl-dom/wacl-dom.tcl",
+  ];
 
-      // `update` yields to the JS event loop (Asyncify-backed), so editor
-      // code can keep the page live across long work. See the REPL for the
-      // rationale; same six-line wrapper.
-      interp.Eval(`
-        namespace eval ::surftcl::OLD {}
-        rename update ::surftcl::OLD::update
-        proc update {args} { ::surftcl::OLD::update {*}$args; ::surftcl::js::yield }
-      `);
+  Promise.all(packageFiles.map((p) =>
+    fetch("../../" + p).then((r) => {
+      if (!r.ok) throw new Error(p + ": " + r.status);
+      return r.text();
+    }).then((body) => {
+      const full = "/" + p;
+      const dir = full.substring(0, full.lastIndexOf("/"));
+      try { interp.Module.FS.mkdirTree(dir); } catch (e) {}
+      interp.Module.FS.writeFile(full, body);
+    })
+  )).then(() => {
+    interp.Eval("lappend auto_path /packages");
+    interp.Eval("package require surftcl::dom");
 
-      // Examples ribbon.
-      examples.forEach((ex) => {
-        const b = document.createElement("button");
-        b.textContent = ex.name;
-        b.title = "click to load + run; then edit and Ctrl-Enter";
-        b.onclick = () => {
-          editorEl.value = ex.script;
-          runEditor();
-          editorEl.focus();
-        };
-        examplesEl.appendChild(b);
-      });
-
-      // Seed the editor.
-      editorEl.value = examples[0].script;
-
-      appendOut("ready · Tcl " + interp.Eval("info patchlevel") + "\n", "echo");
-      loadingEl.classList.add("gone");
-    }).catch((e) => {
-      appendOut("package install failed: " + e + "\n", "err");
-      loadingEl.textContent = "load failed — see Output";
-    });
-
-    // EvalAsync: editor code may `update` (yield) — e.g. an animation loop
-    // that wants the page to repaint between steps. Fire-and-forget so the
-    // page stays live while it runs.
-    function runEditor() {
-      const src = editorEl.value;
-      const echo = src.split("\n").map(l => "$ " + l).join("\n");
-      appendOut(echo + "\n", "echo");
-      interp.EvalAsync(src).then((r) => {
-        if (r !== "") appendOut("= " + r + "\n");
-      }).catch((e) => {
-        appendOut((e.errorInfo || String(e)) + "\n", "err");
-      });
-    }
-
-    runBtn.onclick = runEditor;
-    editorEl.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
+    // Examples ribbon.
+    examples.forEach((ex) => {
+      const b = document.createElement("button");
+      b.textContent = ex.name;
+      b.title = "click to load + run; then edit and Ctrl-Enter";
+      b.onclick = () => {
+        editorEl.value = ex.script;
         runEditor();
-      }
+        editorEl.focus();
+      };
+      examplesEl.appendChild(b);
     });
 
-    window.__interp = interp;
+    // Seed the editor.
+    editorEl.value = examples[0].script;
+
+    appendOut("ready · surftcl " + surftcl.VERSION +
+              " · Tcl " + interp.Eval("info patchlevel") + "\n", "echo");
+    loadingEl.classList.add("gone");
+  }).catch((e) => {
+    appendOut("package install failed: " + e + "\n", "err");
+    loadingEl.textContent = "load failed — see Output";
   });
+
+  // Eval is synchronous: a long-running script holds the tab until it
+  // returns. The cooperative idiom for staged work is `after`-scheduled
+  // events, which the browser-driven main loop fires between frames.
+  function runEditor() {
+    const src = editorEl.value;
+    const echo = src.split("\n").map(l => "$ " + l).join("\n");
+    appendOut(echo + "\n", "echo");
+    try {
+      const r = interp.Eval(src);
+      if (r !== "") appendOut("= " + r + "\n");
+    } catch (e) {
+      appendOut((e.errorInfo || String(e)) + "\n", "err");
+    }
+  }
+
+  runBtn.onclick = runEditor;
+  editorEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      runEditor();
+    }
+  });
+
+  window.__interp = interp;
+  window.__surftcl = surftcl;
+}).catch((e) => {
+  loadingEl.textContent = "surftcl failed to load — see the browser console";
+  console.error(e);
+});
 </script>
 
 </body>

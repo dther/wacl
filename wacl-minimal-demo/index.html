@@ -267,18 +267,6 @@ import("./surftcl-bootstrap.mjs").then((surftcl) => {
     });
     interp.GrantEval();
 
-    // Make `update` the yield-to-the-substrate primitive: run Tcl's own
-    // queue, then hand the JS event loop a turn (::surftcl::js::yield, backed
-    // by Asyncify). Six lines of Tcl, no C idletask — so a long REPL
-    // command that calls `update` keeps the page responsive instead of
-    // freezing it. This is opt-in per page; the REPL installs it so yield
-    // is there to play with.
-    interp.Eval(`
-      namespace eval ::surftcl::OLD {}
-      rename update ::surftcl::OLD::update
-      proc update {args} { ::surftcl::OLD::update {*}$args; ::surftcl::js::yield }
-    `);
-
     // JS-side packages. Each is a small Tcl module that uses the granted
     // `eval` to install its JS shims at require-time, then exposes a Tcl
     // surface. Fetched here, dropped into the in-wasm filesystem, added
@@ -312,7 +300,8 @@ import("./surftcl-bootstrap.mjs").then((surftcl) => {
       });
     }
 
-    term.write("surftcl — Tcl " + interp.Eval("info patchlevel") + "\n");
+    term.write("surftcl " + surftcl.VERSION +
+               " — Tcl " + interp.Eval("info patchlevel") + "\n");
     term.write("type tcl. enter submits, shift+enter for a newline.\n");
     term.write("JS bridge: ::surftcl::js::call NAME ARGLIST; granted: " +
                interp.Eval("::surftcl::js::names") + "\n");
@@ -326,13 +315,13 @@ import("./surftcl-bootstrap.mjs").then((surftcl) => {
 
     term.focus();
 
-    // Things to try from the JS console — `surftcl` is the canonical handle,
-    // `__interp` / `__surftcl` are aliases for shorter typing:
-    //   surftcl.Eval("expr {2+2}")
-    //   surftcl.pushStdin("hello\n"); surftcl.Eval("gets stdin")
-    //   surftcl.js.register("ping", a => "pong:" + a.join(","))
-    //   surftcl.Eval("::surftcl::js::call ping one two three")
-    //   surftcl.supportURL = "https://example.com/report"  // try an error
+    // Things to try from the JS console — there is no global handle; this
+    // page assigns `__interp` (the Runtime) and `__surftcl` (the module):
+    //   __interp.Eval("expr {2+2}")
+    //   __interp.stdin.write("hello\n"); __interp.Eval("gets stdin")
+    //   __interp.js.register("ping", a => "pong:" + a.join(","))
+    //   __interp.Eval("::surftcl::js::call ping one two three")
+    //   __interp.supportURL = "https://example.com/report"  // try an error
 });
 </script>
 
