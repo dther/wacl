@@ -44,7 +44,7 @@ const FS = interp.Module.FS;
 // — if a zip is malformed or a package fails to load from one, the
 // suite goes red. Build them first with `make -C ext` (or `make
 // test` at the repo root, which does both).
-const pkgNames = ['wacl-json', 'wacl-dom', 'wacl-chan'];
+const pkgNames = ['wacl-json', 'wacl-dom'];
 const extBuild = path.join(root, 'ext', 'build');
 try { FS.mkdirTree('/zips'); } catch (e) {}
 for (const name of pkgNames) {

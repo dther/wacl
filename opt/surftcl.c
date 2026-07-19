@@ -197,6 +197,8 @@ SurfTcl_Init(Tcl_Interp *interp)
     Tcl_CreateObjCommand(interp, "::surftcl::js::names",  surftcl_JsNamesCmd,  NULL, NULL);
     Tcl_CreateObjCommand(interp, "::surftcl::js::revoke", surftcl_JsRevokeCmd, NULL, NULL);
 
+    SurfTcl_ChanInit(interp);
+
     Tcl_PkgProvide(interp, "surftcl", SURFTCL_VERSION);
     return TCL_OK;
 }

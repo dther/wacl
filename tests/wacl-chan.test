@@ -1,20 +1,20 @@
 # surftcl::chan — tcltest suite.
 #
-# Covers the reflected channel: open/names, the EXISTS guard,
-# close/finalize bookkeeping, the byte round-trip both directions
-# (JS->Tcl via `chan read`, Tcl->JS via `onData`), and — since the
-# main-thread notifier landed — readable-fileevent *dispatch* pumped
-# by `update`.
+# Covers the C-core channel (opt/surftclChan.c): open/names, the
+# BADNAME/EXISTS guards, close bookkeeping on both sides, the byte
+# round-trip in both directions (JS->Tcl via `chan read`, Tcl->JS via
+# `onData`), EOF-after-drain semantics for a JS-side close, and readable-
+# fileevent delivery through the real path — the C core queues the notify
+# event when JS writes, and `update` pumps it.
 #
-# On `vwait`: it can't be used here. On the main thread a blocking
-# `vwait` can't yield to the JS loop that would produce the event, so
-# it raises `TCL EVENT NO_SOURCES` at once (see opt/waclNotifier.c).
-# The event-loop test below instead posts the readable event and pumps
-# it with `update` (the Tcl-side sibling of SurfTcl_ServiceEvents), the
-# idiom that actually works.
+# On `vwait`: it can't be used here. On the main thread a blocking `vwait`
+# can't yield to the JS loop that would produce the event, so it raises
+# `TCL EVENT NO_SOURCES` at once (see opt/surftclNotifier.c). Tests pump
+# with `update` instead.
 #
 # This suite runs identically headless and in the browser — the channel
-# needs no DOM, only the surftclChan surface the package installs itself.
+# needs no DOM. The `js` helper needs the host-granted `eval` to reach
+# Runtime.chan; the channel itself needs no grant.
 
 package require tcltest
 package require surftcl::chan
@@ -47,7 +47,7 @@ test chan-open-1.3 {channel comes configured non-blocking, unbuffered} -body {
 
 test chan-open-1.4 {the JS side sees the name too} -body {
     set ch [surftcl::chan open c4]
-    js {String(globalThis.surftclChan.names().indexOf("c4") >= 0)}
+    js {String(this.chan.names().indexOf("c4") >= 0)}
 } -cleanup {
     close $ch
 } -result true
@@ -70,7 +70,12 @@ test chan-open-2.1 {double open throws SURFTCL CHAN EXISTS} -setup {
 } -returnCodes error -errorCode {SURFTCL CHAN EXISTS} \
   -match glob -result {channel already open:*}
 
-# ----- close / finalize bookkeeping -----
+test chan-open-2.2 {names outside [A-Za-z0-9_-] are rejected} -body {
+    surftcl::chan open "no spaces"
+} -returnCodes error -errorCode {SURFTCL CHAN BADNAME} \
+  -match glob -result {bad channel name*}
+
+# ----- close bookkeeping -----
 test chan-close-1.1 {close drops the name from the Tcl registry} -body {
     set ch [surftcl::chan open x1]
     close $ch
@@ -80,13 +85,26 @@ test chan-close-1.1 {close drops the name from the Tcl registry} -body {
 test chan-close-1.2 {close drops the name from the JS registry} -body {
     set ch [surftcl::chan open x2]
     close $ch
-    js {String(globalThis.surftclChan.names().indexOf("x2") >= 0)}
+    js {String(this.chan.names().indexOf("x2") >= 0)}
 } -result false
+
+test chan-close-2.1 {a JS write to a Tcl-closed channel throws JS-side} -setup {
+    set ch [surftcl::chan open x3]
+    js {globalThis.__a = this.chan.attach("x3"); "ok"}
+} -body {
+    close $ch
+    js {
+        try { __a.write("nope"); "no-throw" }
+        catch (e) { "threw: " + e.message }
+    }
+} -cleanup {
+    js {delete globalThis.__a; "ok"}
+} -match glob -result {threw: channel closed:*}
 
 # ----- attach errors -----
 test chan-attach-1.1 {attach to an unknown name throws JS-side} -body {
     js {
-        try { surftclChan.attach("nope"); "no-throw" }
+        try { this.chan.attach("nope"); "no-throw" }
         catch (e) { "threw: " + e.message }
     }
 } -match glob -result {threw: *no such channel: nope}
@@ -94,7 +112,7 @@ test chan-attach-1.1 {attach to an unknown name throws JS-side} -body {
 # ----- JS -> Tcl: js write, tcl read -----
 test chan-j2t-1.1 {a JS write is drained by a Tcl read} -setup {
     set ch [surftcl::chan open d1]
-    js {globalThis.__a = surftclChan.attach("d1"); "ok"}
+    js {globalThis.__a = this.chan.attach("d1"); "ok"}
 } -body {
     js {__a.write("hello"); "ok"}
     chan read $ch 5
@@ -113,7 +131,7 @@ test chan-j2t-1.2 {an empty channel reads as the empty string} -setup {
 
 test chan-j2t-1.3 {a partial read leaves the remainder buffered} -setup {
     set ch [surftcl::chan open d3]
-    js {globalThis.__a = surftclChan.attach("d3"); "ok"}
+    js {globalThis.__a = this.chan.attach("d3"); "ok"}
 } -body {
     js {__a.write("abcdef"); "ok"}
     set first  [chan read $ch 2]
@@ -126,7 +144,7 @@ test chan-j2t-1.3 {a partial read leaves the remainder buffered} -setup {
 
 test chan-j2t-2.1 {bytes 1..255 round-trip with full fidelity} -setup {
     set ch [surftcl::chan open d4]
-    js {globalThis.__a = surftclChan.attach("d4"); "ok"}
+    js {globalThis.__a = this.chan.attach("d4"); "ok"}
 } -body {
     js {var arr = []; for (var i = 1; i < 256; i++) arr.push(i);
         __a.write(new Uint8Array(arr)); "ok"}
@@ -140,26 +158,40 @@ test chan-j2t-2.1 {bytes 1..255 round-trip with full fidelity} -setup {
     js {delete globalThis.__a; "ok"}
 } -result {255 1}
 
-test chan-j2t-2.2 {NUL truncates the payload at the bridge boundary} -setup {
+test chan-j2t-2.2 {NUL crosses the boundary intact — the channel is byte-clean} -setup {
     set ch [surftcl::chan open d5]
-    js {globalThis.__a = surftclChan.attach("d5"); "ok"}
+    js {globalThis.__a = this.chan.attach("d5"); "ok"}
 } -body {
-    # The js::call return crosses the wasm boundary as a C string, so a
-    # NUL byte ends it early: [65,0,66] arrives as just "A". This is the
-    # one place the otherwise byte-clean channel is not. Asserted so the
-    # boundary is a known, tested fact rather than a latent surprise.
+    # Bytes cross as pointer+length, so NUL is just another byte. The old
+    # string bridge truncated [65,0,66] to "A" here; this pins the
+    # byte-clean contract of the C core as the tested fact instead.
     js {__a.write(new Uint8Array([65, 0, 66])); "ok"}
     set data [chan read $ch 10]
-    string length $data
+    binary scan $data cu* got
+    list [string length $data] $got
 } -cleanup {
     close $ch
     js {delete globalThis.__a; "ok"}
-} -result 1
+} -result {3 {65 0 66}}
+
+test chan-j2t-3.1 {a JS close means EOF only after the queue drains} -setup {
+    set ch [surftcl::chan open d6]
+    js {globalThis.__a = this.chan.attach("d6"); "ok"}
+} -body {
+    js {__a.write("tail"); __a.close(); "ok"}
+    set data [read $ch 4]
+    set atEof [eof $ch]
+    set more [read $ch 4]
+    list $data $atEof $more [eof $ch]
+} -cleanup {
+    close $ch
+    js {delete globalThis.__a; "ok"}
+} -result {tail 0 {} 1}
 
 # ----- Tcl -> JS: tcl write, js onData -----
 test chan-t2j-1.1 {a Tcl write reaches the JS onData callback} -setup {
     set ch [surftcl::chan open w1]
-    js {globalThis.__a = surftclChan.attach("w1");
+    js {globalThis.__a = this.chan.attach("w1");
         globalThis.__got = null;
         __a.onData = function (b) {
             globalThis.__got = Array.prototype.join.call(b, ",");
@@ -176,7 +208,7 @@ test chan-t2j-1.1 {a Tcl write reaches the JS onData callback} -setup {
 
 test chan-t2j-2.1 {high bytes survive the Tcl->JS direction too} -setup {
     set ch [surftcl::chan open w2]
-    js {globalThis.__a = surftclChan.attach("w2");
+    js {globalThis.__a = this.chan.attach("w2");
         globalThis.__sum = 0;
         __a.onData = function (b) {
             for (var i = 0; i < b.length; i++) globalThis.__sum += b[i];
@@ -194,22 +226,21 @@ test chan-t2j-2.1 {high bytes survive the Tcl->JS direction too} -setup {
     js {delete globalThis.__a; delete globalThis.__sum; "ok"}
 } -result 32640
 
-# ----- readable fileevent dispatch, pumped by `update` -----
-test chan-fileevent-1.1 {a readable fileevent dispatches JS-fed bytes when the loop is pumped} -setup {
+# ----- readable fileevent delivery, pumped by `update` -----
+test chan-fileevent-1.1 {JS-fed bytes dispatch a readable fileevent when the loop is pumped} -setup {
     set ch [surftcl::chan open f1]
-    js {globalThis.__a = surftclChan.attach("f1"); "ok"}
+    js {globalThis.__a = this.chan.attach("f1"); "ok"}
 } -body {
-    # Event *dispatch*, not callback assignment (the thing the old vwait
-    # version couldn't reach): JS feeds bytes, we post a readable event
-    # the way the channel's async path eventually would, and `update`
-    # runs the registered fileevent, which drains the bytes. No `vwait` —
-    # it can't work on the main thread. The async JS->setTimeout->
-    # postevent *delivery* is a separate concern a synchronous test can't
-    # observe; posting directly here exercises the dispatch path itself.
+    # The real delivery path, end to end: the C core queues the readable
+    # notification when JS writes (Tcl_QueueEvent -> Tcl_NotifyChannel),
+    # and `update` pumps it — no manual chan postevent. (The old scripted
+    # channel could only test dispatch by posting the event itself; its
+    # actual JS->Tcl delivery relied on setTimeout callbacks with broken
+    # `this` bindings and never worked.) No `vwait` — it can't work on
+    # the main thread.
     set ::got ""
     fileevent $ch readable {append ::got [read $ch]}
     js {__a.write("ping"); "ok"}
-    chan postevent $ch read
     update
     set ::got
 } -cleanup {

@@ -278,8 +278,6 @@ import("./surftcl-bootstrap.mjs").then((surftcl) => {
       "packages/wacl-json/wacl-json.tcl",
       "packages/wacl-dom/pkgIndex.tcl",
       "packages/wacl-dom/wacl-dom.tcl",
-      "packages/wacl-chan/pkgIndex.tcl",
-      "packages/wacl-chan/wacl-chan.tcl",
     ];
 
     function installPackages() {
@@ -307,8 +305,9 @@ import("./surftcl-bootstrap.mjs").then((surftcl) => {
                interp.Eval("::surftcl::js::names") + "\n");
 
     installPackages().then(() => {
-      term.write("packages: surftcl::json, surftcl::dom, surftcl::chan " +
-                 "(package require <name>; then ::surftcl::js::revoke eval)\n\n");
+      term.write("packages: surftcl::json, surftcl::dom " +
+                 "(package require <name>; then ::surftcl::js::revoke eval); " +
+                 "surftcl::chan is built in\n\n");
     }).catch((e) => {
       term.writeErr("package install failed: " + e + "\n\n");
     });

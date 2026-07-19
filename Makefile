@@ -35,7 +35,7 @@ WASMFLAGS_MINIMAL = \
     -s EXPORT_NAME=createSurfTcl \
     -s FORCE_FILESYSTEM=1 \
     -s ALLOW_TABLE_GROWTH=1 \
-    -s EXPORTED_RUNTIME_METHODS=cwrap,ccall,FS,addFunction,removeFunction,getValue,UTF8ToString \
+    -s EXPORTED_RUNTIME_METHODS=cwrap,ccall,FS,addFunction,removeFunction,getValue,UTF8ToString,HEAPU8 \
     --embed-file tcl/unix/libtcl9.0.3.zip@/lib/tcl.zip
 
 SURFTCLEXPORTS = \
@@ -48,7 +48,13 @@ SURFTCLEXPORTS = \
         _SurfTcl_RevokeJsFn,\
         _SurfTcl_SetJsResultString,\
         _SurfTcl_AppendJsErrorCodeElement,\
-        _SurfTcl_Panic\
+        _SurfTcl_Panic,\
+        _SurfTcl_ChanWrite,\
+        _SurfTcl_ChanCloseFromJs,\
+        _SurfTcl_ChanExists,\
+        _SurfTcl_ChanNames,\
+        _malloc,\
+        _free\
     "
 
 SURFTCLCC = \
@@ -99,7 +105,7 @@ tcl/unix/libtcl9.0.a: tcl/unix/Makefile
 # Order-only: the opt/ compiles include headers from the Tcl source tree,
 # so on a cold build the tree must be unpacked and configured first. Order-
 # only because a re-download/re-configure shouldn't force .o rebuilds.
-surftcl.o surftclAppInit.o surftclNotifier.o: | tcl/unix/Makefile
+surftcl.o surftclAppInit.o surftclNotifier.o surftclChan.o: | tcl/unix/Makefile
 
 surftcl.o: opt/surftcl.c
 	emcc $(SURFTCLCC) -c $^ -o $@
@@ -110,7 +116,10 @@ surftclAppInit.o: opt/surftclAppInit.c
 surftclNotifier.o: opt/surftclNotifier.c
 	emcc $(SURFTCLCC) -c $^ -o $@
 
-surftcl.mjs: surftcl.o surftclAppInit.o surftclNotifier.o tcl/unix/libtcl9.0.a
+surftclChan.o: opt/surftclChan.c
+	emcc $(SURFTCLCC) -c $^ -o $@
+
+surftcl.mjs: surftcl.o surftclAppInit.o surftclNotifier.o surftclChan.o tcl/unix/libtcl9.0.a
 	emcc $(WASMFLAGS_MINIMAL) $(SURFTCLEXPORTS) \
 	    $^ -o $@
 

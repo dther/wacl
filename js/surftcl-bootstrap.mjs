@@ -302,6 +302,83 @@ export const JsFunctionRegistry = {
 
 }
 
+// The JS side of the surftcl channel (C core in opt/surftclChan.c),
+// exposed as Runtime.chan. Tcl opens channels (`surftcl::chan open NAME`);
+// the page attaches by name to exchange bytes with them. A channel is
+// inert until attached: Tcl-side writes are dropped, and the input queue
+// only ever holds what the page chose to write — which is why, unlike the
+// function registry, channels need no host grant.
+//
+//   const ch = interp.chan.attach("events");
+//   ch.onData = (bytes) => ...;      // Uint8Array, Tcl -> JS
+//   ch.write("payload");             // string (UTF-8) or Uint8Array
+//   ch.close();                      // Tcl reader sees EOF after draining
+//
+// Bytes cross as pointer+length, so the path is byte-clean including NUL.
+// close() ends the JS->Tcl direction only; Tcl-side writes still deliver
+// to onData until the Tcl side closes the channel.
+const SurfTclChanRegistry = {
+  _handles: new Map(),
+
+  attach(name) {
+    if (typeof name !== 'string') throw new TypeError('attach: name must be a string');
+    const attached = this._handles.get(name);
+    if (attached) return attached.surface;
+    if (!Runtime._chanExists(name)) throw new Error('no such channel: ' + name);
+
+    const entry = { onData: null, dead: false, surface: null };
+    entry.surface = {
+      get onData() { return entry.onData; },
+      set onData(fn) { entry.onData = fn; },
+
+      write(data) {
+        if (entry.dead) throw new Error('channel closed: ' + name);
+        const bytes = typeof data === 'string' ? Encoder.encode(data) : data;
+        if (!(bytes instanceof Uint8Array)) {
+          throw new TypeError('write: expected a string or Uint8Array');
+        }
+        const ptr = Module._malloc(bytes.length || 1);
+        Module.HEAPU8.set(bytes, ptr);
+        const rc = Runtime._chanWrite(name, ptr, bytes.length);
+        Module._free(ptr);
+        if (rc < 0) throw new Error('channel closed: ' + name);
+        return rc;
+      },
+
+      close() {
+        if (entry.dead) throw new Error('channel closed: ' + name);
+        Runtime._chanCloseFromJs(name);
+      },
+    };
+    this._handles.set(name, entry);
+    return entry.surface;
+  },
+
+  names() {
+    const joined = Runtime._chanNames();
+    return joined === '' ? [] : joined.split(' ');
+  },
+
+  // Called from the wasm side (EM_ASM in opt/surftclChan.c). _deliver must
+  // not throw back into the C output proc, so callback failures route
+  // through the failure surface instead.
+  _deliver(name, ptr, len) {
+    const entry = this._handles.get(name);
+    if (!entry || !entry.onData) return;
+    const bytes = Module.HEAPU8.slice(ptr, ptr + len);
+    try { entry.onData(bytes); }
+    catch (e) { Runtime.onError('chan ' + name, e); }
+  },
+
+  _closed(name) {
+    const entry = this._handles.get(name);
+    if (entry) {
+      entry.dead = true;
+      this._handles.delete(name);
+    }
+  },
+};
+
 export class TclResult {
   /* TclResult can be used to wrap the returned value of a JS function
    * for finer control over the state of the Tcl interpreter.
@@ -406,6 +483,12 @@ Module['postRun'] = () => {
     _setJsResult:       Module.cwrap('SurfTcl_SetJsResultString',          null,   ['string']),
     _registerJsFn:      Module.cwrap('SurfTcl_RegisterJsFn',             'number', ['string', 'number']),
     _revokeJsFn:        Module.cwrap('SurfTcl_RevokeJsFn',               'number', ['string']),
+
+    chan: SurfTclChanRegistry,
+    _chanWrite:         Module.cwrap('SurfTcl_ChanWrite',               'number', ['string', 'number', 'number']),
+    _chanCloseFromJs:   Module.cwrap('SurfTcl_ChanCloseFromJs',         'number', ['string']),
+    _chanExists:        Module.cwrap('SurfTcl_ChanExists',              'number', ['string']),
+    _chanNames:         Module.cwrap('SurfTcl_ChanNames',               'string', []),
 
     GrantEval() {
       // Grants `surftcl::js::call eval` privileges to the interpreter.
