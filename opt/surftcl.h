@@ -23,6 +23,20 @@ int  SurfTcl_RevokeJsFn(const char *name);
 int  SurfTcl_Eval(Tcl_Interp *interp, const char *name);
 void SurfTcl_SetJsResultString(const char *s);
 void SurfTcl_AppendJsErrorCodeElement(const char *s);
+void SurfTcl_Panic(const char *msg);
+
+/*
+ * The surftcl channel (opt/surftclChan.c): a C channel type whose JS side
+ * is Runtime.chan in the bootstrap. SurfTcl_ChanInit registers the Tcl
+ * command surface; the SurfTcl_Chan* entry points below are exported for
+ * the JS attach surface (bytes cross as pointer+length).
+ */
+int SurfTcl_ChanInit(Tcl_Interp *interp);
+int SurfTcl_InstallStdChannel(void);
+int SurfTcl_ChanWrite(const char *name, const unsigned char *buf, int len);
+int SurfTcl_ChanCloseFromJs(const char *name);
+int SurfTcl_ChanExists(const char *name);
+const char *SurfTcl_ChanNames(void);
 
 /*
  * Main-thread event-loop integration (opt/surftclNotifier.c). SurfTcl_InstallNotifier

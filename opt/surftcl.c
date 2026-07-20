@@ -197,6 +197,8 @@ SurfTcl_Init(Tcl_Interp *interp)
     Tcl_CreateObjCommand(interp, "::surftcl::js::names",  surftcl_JsNamesCmd,  NULL, NULL);
     Tcl_CreateObjCommand(interp, "::surftcl::js::revoke", surftcl_JsRevokeCmd, NULL, NULL);
 
+    SurfTcl_ChanInit(interp);
+
     Tcl_PkgProvide(interp, "surftcl", SURFTCL_VERSION);
     return TCL_OK;
 }
@@ -238,4 +240,15 @@ const char *
 SurfTcl_GetStringResult(Tcl_Interp *interp)
 {
     return Tcl_GetString(Tcl_GetObjResult(interp));
+}
+
+/*
+ * A JS-callable funnel into Tcl_Panic, so host-side fatal errors take the
+ * same path as interpreter panics (and the panic surface stays testable
+ * from the harness). Does not return.
+ */
+void
+SurfTcl_Panic(const char *msg)
+{
+    Tcl_Panic("%s", msg);
 }

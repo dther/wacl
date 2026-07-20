@@ -2,7 +2,8 @@
 #
 # Targets that matter:
 #   make tcl          download and unpack Tcl 9 source under ./tcl/
-#   make minimal      build wacl-minimal.{js,wasm} and copy them into wacl-minimal-demo/
+#   make minimal      build surftcl.mjs + surftcl.wasm and copy them (with
+#                     js/surftcl-bootstrap.mjs) into wacl-minimal-demo/
 #   make surftcl-demo build the wasm, then copy the demo site (pages, wasm,
 #                     packages, tests) into the surftcl-demo repo
 #   make packages     build the per-package release zips under ext/build/
@@ -34,7 +35,7 @@ WASMFLAGS_MINIMAL = \
     -s EXPORT_NAME=createSurfTcl \
     -s FORCE_FILESYSTEM=1 \
     -s ALLOW_TABLE_GROWTH=1 \
-    -s EXPORTED_RUNTIME_METHODS=cwrap,ccall,FS,addFunction,removeFunction,getValue,UTF8ToString \
+    -s EXPORTED_RUNTIME_METHODS=cwrap,ccall,FS,addFunction,removeFunction,getValue,UTF8ToString,HEAPU8 \
     --embed-file tcl/unix/libtcl9.0.3.zip@/lib/tcl.zip
 
 SURFTCLEXPORTS = \
@@ -46,7 +47,14 @@ SURFTCLEXPORTS = \
         _SurfTcl_RegisterJsFn,\
         _SurfTcl_RevokeJsFn,\
         _SurfTcl_SetJsResultString,\
-        _SurfTcl_AppendJsErrorCodeElement\
+        _SurfTcl_AppendJsErrorCodeElement,\
+        _SurfTcl_Panic,\
+        _SurfTcl_ChanWrite,\
+        _SurfTcl_ChanCloseFromJs,\
+        _SurfTcl_ChanExists,\
+        _SurfTcl_ChanNames,\
+        _malloc,\
+        _free\
     "
 
 SURFTCLCC = \
@@ -63,8 +71,13 @@ default: minimal
 packages:
 	$(MAKE) -C ext
 
+# `env node`, not bare node: emsdk_env.sh puts the emsdk root — which
+# contains a *directory* named node/ — first in PATH, and make's own
+# fast-path exec stops there with EACCES instead of continuing the
+# search the way a shell (or env) does.
 test: minimal packages
-	node tests/run-headless.mjs
+	env node tests/run-headless.mjs
+	env node tests/panic-smoke.mjs
 tcl:
 	wget -nc $(TCLURL)
 	mkdir -p tcl
@@ -89,6 +102,11 @@ tcl/unix/Makefile: tcl
 tcl/unix/libtcl9.0.a: tcl/unix/Makefile
 	cd tcl/unix && emmake make libtcl9.0.a
 
+# Order-only: the opt/ compiles include headers from the Tcl source tree,
+# so on a cold build the tree must be unpacked and configured first. Order-
+# only because a re-download/re-configure shouldn't force .o rebuilds.
+surftcl.o surftclAppInit.o surftclNotifier.o surftclChan.o: | tcl/unix/Makefile
+
 surftcl.o: opt/surftcl.c
 	emcc $(SURFTCLCC) -c $^ -o $@
 
@@ -98,7 +116,10 @@ surftclAppInit.o: opt/surftclAppInit.c
 surftclNotifier.o: opt/surftclNotifier.c
 	emcc $(SURFTCLCC) -c $^ -o $@
 
-surftcl.mjs: surftcl.o surftclAppInit.o surftclNotifier.o tcl/unix/libtcl9.0.a
+surftclChan.o: opt/surftclChan.c
+	emcc $(SURFTCLCC) -c $^ -o $@
+
+surftcl.mjs: surftcl.o surftclAppInit.o surftclNotifier.o surftclChan.o tcl/unix/libtcl9.0.a
 	emcc $(WASMFLAGS_MINIMAL) $(SURFTCLEXPORTS) \
 	    $^ -o $@
 
@@ -113,14 +134,13 @@ minimal: surftcl.mjs surftcl.wasm js/surftcl-bootstrap.mjs
 # resolve unchanged; a root index.html redirects to wacl-minimal-demo/. The
 # repo is a rebuilt artifact — regenerate and commit it on every change,
 # keeping the wasm out of source-tree history. DEMOREPO is the demo checkout.
-surftcl-demo: wacl-minimal.wasm
+surftcl-demo: minimal
 	mkdir -p $(DEMOREPO)/wacl-minimal-demo/playground \
 	         $(DEMOREPO)/wacl-minimal-demo/tests $(DEMOREPO)/tests
 	cp wacl-minimal-demo/index.html            $(DEMOREPO)/wacl-minimal-demo/
 	cp wacl-minimal-demo/playground/index.html $(DEMOREPO)/wacl-minimal-demo/playground/
 	cp wacl-minimal-demo/tests/index.html      $(DEMOREPO)/wacl-minimal-demo/tests/
-	cp wacl-minimal.js wacl-minimal.wasm       $(DEMOREPO)/wacl-minimal-demo/
-	cp wacl-minimal.wasm                       $(DEMOREPO)/wacl-minimal-demo/wacl.wasm
+	cp surftcl.mjs surftcl.wasm js/surftcl-bootstrap.mjs $(DEMOREPO)/wacl-minimal-demo/
 	rm -rf $(DEMOREPO)/packages && cp -R packages $(DEMOREPO)/packages
 	cp tests/all.tcl tests/wacl-*.test         $(DEMOREPO)/tests/
 	printf '%s\n' \
@@ -138,7 +158,9 @@ surftcl-demo: wacl-minimal.wasm
 	    '</html>' > $(DEMOREPO)/index.html
 
 clean:
-	rm -f *.o wacl-minimal.js wacl-minimal.wasm
+	rm -f *.o surftcl.mjs surftcl.wasm \
+	    wacl-minimal-demo/surftcl.mjs wacl-minimal-demo/surftcl.wasm \
+	    wacl-minimal-demo/surftcl-bootstrap.mjs
 	if [ -e tcl/unix/Makefile ] ; then cd tcl/unix && make clean ; fi
 
 # We don't ever change the Tcl source tarball directly,

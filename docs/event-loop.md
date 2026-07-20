@@ -18,14 +18,15 @@ Two files:
 
 - **`opt/surftclNotifier.c`** — installs, via `Tcl_SetNotifier` at the
   top of `main` (no Tcl-source patch), a notifier that refuses to
-  block. Almost all of it is stubs, deliberately: reflected channels
-  post their readability onto Tcl's generic event queue (`chan
-  postevent` → `Tcl_QueueEvent`) and `after` timers live on Tcl's own
-  timer queue — both drained by `Tcl_DoOneEvent` regardless of the
-  platform notifier. The notifier's only real job is to stop trying to
-  wait.
-- **`opt/surftclAppInit.c`** — `main` installs the notifier, mounts the
-  library zip, runs `Tcl_Init` + `SurfTcl_Init`, then registers
+  block. Almost all of it is stubs, deliberately: channel readability
+  lands on Tcl's generic event queue (surftcl channels queue it C-side
+  via `Tcl_QueueEvent`; reflected `chan postevent` does the same) and
+  `after` timers live on Tcl's own timer queue — both drained by
+  `Tcl_DoOneEvent` regardless of the platform notifier. The notifier's
+  only real job is to stop trying to wait.
+- **`opt/surftclAppInit.c`** — `main` installs the panic proc and the
+  notifier, claims stdin as a surftcl channel, mounts the library zip,
+  runs `Tcl_Init` + `SurfTcl_Init`, then registers
   `SurfTclMainLoop` with `emscripten_set_main_loop(loop, 0, 0)`: the
   browser calls it on every requestAnimationFrame tick, and it runs one
   `Tcl_DoOneEvent(TCL_DONT_WAIT|TCL_ALL_EVENTS)`. (TODO recorded in the
@@ -103,21 +104,24 @@ Reading `tcl/unix/tclSelectNotfy.c` + `generic/tclNotify.c` directly:
 
 Wire **just the channels** and let the bytestream be the abstraction
 everything else rides on. Application event channels are in-memory byte
-buffers exposed as Tcl reflected channels (`chan create` — the
-`surftcl::chan` shape), **no Emscripten pipes**: JS appends bytes and
-posts readable; the next pump fires the `fileevent`. DOM events, fetch
-responses, WebSocket frames, gamepad polls — all can dispatch into Tcl
-as bytes on a channel, and Tcl can `fileevent`, buffer, and reconfigure
-them because they're just strings.
+buffers exposed as `surftcl::chan` channels — a C channel type
+(`opt/surftclChan.c`), **no Emscripten pipes**: JS appends bytes
+(`Runtime.chan.attach(NAME).write(...)`), the C side queues the
+readable notification (`Tcl_QueueEvent` → `Tcl_NotifyChannel`), and the
+next pump fires the `fileevent`. DOM events, fetch responses, WebSocket
+frames, gamepad polls — all can dispatch into Tcl as bytes on a
+channel, and Tcl can `fileevent`, buffer, and reconfigure them because
+they're just strings. (The first cut was a scripted reflected channel
+plus `chan postevent`; it moved to C on the chan-rework pass, which
+also made the byte path pointer+length clean.)
 
-**stdio is NOT one of these.** stdin/stdout/stderr are Tcl's own
-standard channels over Emscripten `FS.init` fd devices (see the Stdio
-section of CLAUDE.md). They stay in that standard-channel layer;
-`surftcl::chan` is for app special-use channels, never the standard
-streams. Known wart recorded as `DEFER(channel rework)`: the Emscripten
-devices are never-blocking and can't signal "no data yet" as distinct
-from EOF — the fix belongs in that device layer (EAGAIN-honest
-devices), not in reflected channels.
+**stdin is one of these now.** The Emscripten fd devices are
+never-blocking, and their only "no data" signal used to read as EOF —
+so on the same pass stdin became a surftcl channel installed via
+`Tcl_SetStdChannel` before anything acquires fd 0. `chan eof stdin` is
+honest and `fileevent readable stdin` fires like any other channel
+event. stdout/stderr stay on `FS.init` devices: write-only streams
+don't suffer the conflation. See the Stdio section of CLAUDE.md.
 
 ## The Asyncify era — built, proven, removed (retrospective)
 

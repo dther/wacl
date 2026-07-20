@@ -88,8 +88,11 @@ re-downloading; `fullclean` removes the tarball too.
 - `make tcl`: download Tcl 9.0.3 source tarball and unpack to `tcl/`.
 - Build requires Emscripten 5.0.2, pending a version bump. Later
   versions are currently untested, but we want to target the latest
-  stable version. emsdk lives at `/opt/emsdk`; source
-  `/opt/emsdk/emsdk_env.sh` before each session's first build.
+  stable version. emsdk location varies by container (`/opt/emsdk`
+  historically; check `which emcc` / look for `emsdk_env.sh`). If it's
+  absent, clone `emscripten-core/emsdk`, `./emsdk install 5.0.2 &&
+  ./emsdk activate 5.0.2` (~a minute on a good pipe). Source
+  `emsdk_env.sh` before each session's first build.
 - `make tcl/unix/Makefile` runs `emconfigure` then sed-patches Tcl's
   generated `Makefile` to:
     1. Add `${ZLIB_INCLUDE}` to `CC_SWITCHES`. Tcl 9 upstream bug — when
@@ -129,46 +132,16 @@ re-downloading; `fullclean` removes the tarball too.
   `wacl-minimal-demo/`) are generated, not committed. The demo site
   carries its own copies in the surftcl-demo repo.
 
-## Known stale / broken (as of the refactor-review pass)
+## Known stale / broken (as of the chan-rework pass)
 
-The refactor outran some of the tree. Verified by source-reading on this
-pass; prune entries as they get fixed:
-
-- **`make surftcl-demo` is broken**: the recipe still depends on
-  `wacl-minimal.wasm` and copies `wacl-minimal.js` — targets that no
-  longer exist. Same for `make clean` (removes only the old artifact
-  names) and the Makefile's header comment. `.gitignore` likewise still
-  lists `wacl-minimal.{js,wasm}` / `wacl.wasm` but not `surftcl.mjs` /
-  `surftcl.wasm` or the copies `make minimal` drops into
-  `wacl-minimal-demo/`, so a build leaves untracked noise.
-- **The playground page is broken mid-migration**: it imports the ES6
-  module but still calls `surftcl.onReady(...)` (removed — the module's
-  default export replaced it) and assigns `interp.stdout = fn`
-  (now `interp.stdout.sink = fn`). Fixing it is now a stated priority —
-  dther deferred it until the REPL was reliable, which it now is.
-- **The REPL still installs the `update` → `::surftcl::js::yield`
-  wrapper** at boot; `::surftcl::js::yield` no longer exists, so typing
-  `update` in the REPL errors. Its console-hint comments also reference
-  `surftcl.pushStdin` (now `interp.stdin.write`) and a global `surftcl`
-  handle (no longer blessed — see the module shape below).
-- **`tests/run-headless.mjs` is dead**: AMD-era loader (reads
-  `wacl-minimal.js`, `onReady`, `interp.stdout =` setters). `make test`
-  is broken until it's rewritten against the ES6 module.
-  **`tests/run-async.mjs` is deader**: it tests `EvalAsync`, yield, and
-  `SurfTcl_ServiceEvents`, all removed — a deletion candidate.
-- **`packages/wacl-chan` JS shims have broken `this` bindings**: the
-  rework replaced the `surftcl` global with `this`, but inside the
-  `setTimeout` callbacks and the registered plain `function`s `this` is
-  not the Runtime (undefined in module strict mode), so the JS-side
-  write→`chan postevent` path and the `onError` calls would throw. Tests
-  stay green because `chan-fileevent-1.1` posts from the Tcl side.
-  dther's FIXME at the top of the file already condemns the whole
-  package to a heavy rework — treat it as scheduled for demolition, and
-  don't build on it.
-- **`Runtime.onError` is marked FIXME in the bootstrap** ("this error
-  surface doesn't work right, yet"); `TclPanic` is a stub (its
-  constructor references an undefined variable and the C side never
-  throws it).
+Empty. The playground-fix pass cleared the demo/build/runner entries;
+the chan-rework pass cleared the rest: `packages/wacl-chan` (broken
+`this` bindings and all) was deleted in favour of the C channel core,
+`TclPanic` is wired for real (C panic proc installed, constructor
+fixed), and `Runtime.onError` gained its first real caller (the panic
+path — the bootstrap FIXME about the wider error surface is dther's to
+lift). Add entries here when a refactor outruns the tree; prune as they
+get fixed.
 
 ## How the Tcl library gets into the browser
 
@@ -218,20 +191,24 @@ Runtime surface (the public JS API):
     `::errorInfo`/`::errorCode` and throws a `TclException` carrying
     `errorCode`, `errorMessage`, `errorInfo`. There is no async Eval any
     more.
-  - `stdin` / `stdout` / `stderr` — the stdio objects (below).
+  - `stdout` / `stderr` — the stdio sink objects; `stdin` — the attach
+    surface of the "stdin" surftcl channel (see Stdio).
   - `js` — the `JsFunctionRegistry` (below), plus `GrantEval()`,
     `RevokeEval()`, `RevokeEvalPermanently()` on the Runtime itself.
+  - `chan` — the surftcl channel attach surface (its own section below).
   - `supportURL` / `onError(context, error)` — the failure surface
-    (below; currently FIXME'd).
+    (below; the panic path is its first real caller).
   - `Module` — the Emscripten module, for `FS` access etc.
   - Underscore-prefixed cwraps (`_eval`, `_getInterp`, …) are internal.
 
 There is **no global handle any more**: the old
 `Object.defineProperty(globalThis, "surftcl", …)` blessing is gone, and
 pages that want console conveniences set their own (the demos assign
-`window.__interp` / `window.__surftcl`). The one global-ish backref is
-`Module.SurfTcl = Runtime`, set in postRun so the **wasm side** can
-reach the registry from `EM_ASM` (the C `::surftcl::js::revoke` uses it).
+`window.__interp` / `window.__surftcl`). The global-ish backrefs live on
+`Module`, for the **wasm side** to reach from `EM_ASM`: `Module.SurfTcl
+= Runtime` (postRun; the C `::surftcl::js::revoke` and the channel
+delivery use it) and `Module.TclPanic` (set at module load, so even a
+panic during `main()` surfaces typed).
 
 `TclException` / `TclPanic` / `TclResult` use `Symbol.for`-keyed brands
 with `Symbol.hasInstance`, so `instanceof` works across module-instance
@@ -239,33 +216,41 @@ boundaries.
 
 ## Stdio
 
-stdin/stdout/stderr are wired through `FS.init(stdin, stdout, stderr)`
-in `Module.preRun` — the idiomatic Emscripten path, and the only one
-that works (Emscripten's runtime captures `out = Module.print` exactly
-once during `run()`; mutating `Module.print` afterwards is a no-op —
-that gotcha burned the original revival and is why the setter approach
-of the ecky-l era can't come back).
+The three streams take two different paths:
 
-The wiring is three module-level objects, exposed as `Runtime.stdin` /
-`.stdout` / `.stderr`:
+  - `stdout` / `stderr` ride Emscripten FS devices, wired through
+    `FS.init` in `Module.preRun` — the idiomatic Emscripten path, and
+    the only one that works (Emscripten's runtime captures `out =
+    Module.print` exactly once during `run()`; mutating `Module.print`
+    afterwards is a no-op — that gotcha burned the original revival and
+    is why the setter approach of the ecky-l era can't come back).
+    Byte-granular callbacks line-buffer into text and hand the decoded
+    string to a mutable **`.sink`** slot (`interp.stdout.sink = (text)
+    => term.write(text)`). Default sinks log to the JS console.
+    Write-only streams don't suffer the device layer's EOF/EAGAIN
+    conflation, so devices remain the right tool here.
+  - `stdin` is a **surftcl channel** (its own section below):
+    `SurfTcl_InstallStdChannel` in `opt/surftclChan.c` creates it and
+    claims the std slot right after interp creation — std channels are
+    acquired lazily, so being first is all it takes, and Tcl never
+    manufactures the fd-0 device channel. `Runtime.stdin` is literally
+    `Runtime.chan.attach("stdin")`: `write(text)` queues bytes,
+    `close()` means EOF after the queue drains. `chan eof stdin` is
+    honest, and `chan event readable stdin` genuinely fires (the fd-0
+    device's watch requests went to the notifier's no-op file-handler
+    stubs; the channel delivers through the queued-event path).
+    Installed non-blocking, matching what the main thread can satisfy.
 
-  - `stdout` / `stderr`: byte-granular callbacks line-buffer into text
-    and hand the decoded string to a mutable **`.sink`** slot
-    (`interp.stdout.sink = (text) => term.write(text)`). Default sinks
-    log to the JS console.
-  - `stdin`: `interp.stdin.write(text)` appends bytes to a queue that
-    the FS device drains one byte per read; `interp.stdin.close()`
-    forbids further writes (queued bytes still drain). An **empty queue
-    reads as EOF immediately** — the device callback returns null.
-
-Known limitation, recorded as `DEFER(channel rework)` in the source:
-Emscripten's stdio devices break Tcl's assumptions — they are never
-blocking, and there's no way to convey "no data yet" as distinct from
-EOF, so `chan eof` misreports on stdin and `chan event readable` won't
-behave. The fix lives in this standard-channel/device layer (possibly
-replacing the devices with ones that report EAGAIN), **not** in
-`surftcl::chan`; don't route the standard streams through reflected
-channels.
+An earlier note here said the stdio fix must not route the standard
+streams through reflected channels — that objection was to *scripted*
+reflected channels and their eval-shim fragility, and dther retired it
+when the channel core moved to C: a C channel type in the runtime IS the
+standard-channel layer. The fd-0 device keeps a stub callback reporting
+immediate EOF, covering the one script-reachable fallback (`close stdin`
+makes Tcl lazily re-acquire the device). `tests/wacl-stdio.test` pins
+all of this, including the genuine Tcl subtlety that a short
+non-blocking read reports blocked and EOF is observed by the *next*
+read.
 
 ## The JS bridge (`::surftcl::js` + `JsFunctionRegistry`)
 
@@ -418,9 +403,60 @@ locks this in. `SurfTcl_Eval` forces `TCL_EVAL_GLOBAL`: a JS-initiated
 evaluation is a fresh top-level call from outside, so it runs at global
 scope regardless of what Tcl frame happens to be current.
 
+## The surftcl channel (`surftcl::chan` + `Runtime.chan`)
+
+A byte FIFO between the page and the interpreter, implemented as a C
+channel type in `opt/surftclChan.c`. Not a package any more: the old
+scripted `packages/wacl-chan` reflected channel is deleted — its JS-side
+FIFO and `setTimeout` deferrals were scar tissue from the removed
+re-entrancy fence, with broken `this` bindings on the delivery path.
+`package require surftcl::chan` still works because the runtime provides
+the package itself, versioned as `SURFTCL_VERSION`.
+
+Surface:
+
+  Tcl side:
+    surftcl::chan open NAME    -> Tcl channel (binary, -blocking 0,
+                                  -buffering none)
+    surftcl::chan names        -> open surftcl channels ("stdin" included)
+    close $ch                  -> tears down both sides
+  JS side (`interp.chan`):
+    attach(NAME)  -> { onData, write(data), close() }
+    names()       -> array of channel names
+
+Mechanics and contracts:
+
+- Names are `[A-Za-z0-9_-]`, at most 63 bytes (errorCode `{SURFTCL CHAN
+  BADNAME}`; duplicates `{SURFTCL CHAN EXISTS}`). The guard is what
+  keeps a name unambiguous across every boundary it crosses (EM_ASM,
+  cwrap'd C strings, the space-joined names list).
+- Bytes cross the JS↔wasm boundary as pointer+length: **byte-clean
+  including NUL** (`chan-j2t-2.2` asserts fidelity — the old string
+  bridge truncated exactly there). `write` takes a `Uint8Array` as-is or
+  a string encoded UTF-8; `onData` receives a `Uint8Array`.
+- Readability is delivered by queueing a Tcl event (`Tcl_QueueEvent` →
+  `Tcl_NotifyChannel`), never by notifying synchronously from the JS
+  write path — dispatch stays on the event-loop pump (the rAF tick, or
+  `update`), mirroring how reflected postevents behave. The queued event
+  carries the channel *name* and re-looks it up at delivery, so a close
+  in between is a no-op instead of a use-after-free.
+- `attach().close()` ends the JS→Tcl direction: Tcl reads drain the
+  queue, then observe EOF. Tcl-side `close $ch` tears down both sides —
+  the JS handle goes dead (its `write`/`close` throw).
+- **Trust story**: a channel is inert until the page attaches — Tcl-side
+  output is dropped, and the input queue only ever holds what the page
+  chose to write. That's why `surftcl::chan` needs no eval grant, unlike
+  the bridged packages.
+
+This is the interface for application special-use channels — event
+queues, WebSocket wrappers, "JS as a Tcl event queue" — and, since the
+stdin swap, the standard-input mechanism too (see Stdio). fileevents on
+these channels are how JS-side events dispatch into Tcl through the
+normal event-loop machinery.
+
 ## The wacl-* packages (`/packages/`)
 
-Three Tcl packages (all `package provide … 0.0`) that demonstrate the
+Two Tcl packages (both `package provide … 0.0`) that demonstrate the
 bootstrap-then-seal pattern in miniature. Each self-installs its JS
 shims at `package require` time using the host-granted `eval`, then
 exposes a Tcl-side surface. The intended flow is `require X; require Y;
@@ -470,22 +506,6 @@ errors are raised with `TclResult.error(msg, {errorCode: [...]})`.
     `break`/`continue`/`return` from the body work normally; nested
     `each` stacks the currentElement. Composes via `addEventListener`.
 
-  - **surftcl::chan** — `set ch [surftcl::chan open NAME]` returns a Tcl
-    reflected channel (`chan create`), bidirectional and binary. JS
-    attaches with `globalThis.surftclChan.attach(NAME)` to get
-    `{onData, write, close}`. Bytes round-trip via latin-1 to preserve
-    identity. This is the interface for **application special-use
-    channels** — event queues, WebSocket wrappers, "JS as a Tcl event
-    queue": channels with `fileevent` are how JS-side events dispatch
-    into Tcl with the normal event-loop machinery. It is **not** the
-    mechanism for stdio (see Stdio above). **Slated for heavy rework**
-    — dther's FIXME at the top objects to the size of the JS-side FIFO
-    reimplementation (much of it scar tissue from the removed
-    re-entrancy fence: the `setTimeout(0)` postevent deferrals are no
-    longer needed), and the rework may move parts into C. It also has
-    broken `this` bindings on the JS-write path (see Known stale /
-    broken). Don't extend it; rework it.
-
 **Layout.** `/packages/wacl-<name>/{pkgIndex.tcl, wacl-<name>.tcl}` —
 first-party source at the repo root. One main `.tcl` per package,
 code-as-documentation, no minification. The demo pages fetch the loose
@@ -532,9 +552,8 @@ use the standard `-body / -result / -returnCodes / -errorCode / -match`
 machinery, which is exactly the shape needed for asserting the
 structured error codes the packages raise.
 
-**The browser runner is currently the only working runner and is
-authoritative.** dther tests against it; all tests are green there as of
-this pass. Status of each:
+**The browser runner is authoritative** — dther tests against it.
+Status of each:
 
   - **`tests/all.tcl`** — driver, still fine. Sources every `*.test` in
     lexical order in *one* interpreter (NOT `tcltest::runAllTests`,
@@ -544,19 +563,27 @@ this pass. Status of each:
     **works** (fixed for the ES6 module in commit "Make the browser
     testing page work again"). Live log streams tcltest's output,
     classified by line prefix and coloured; status pill reports counts.
-  - **`tests/run-headless.mjs`** — CLI runner, **broken** (AMD-era; see
-    Known stale / broken). Untrusted until rewritten against the ES6
-    module. `make test` depends on it.
-  - **`tests/run-async.mjs`** — tested the removed Asyncify surface;
-    dead, deletion candidate.
+  - **`tests/run-headless.mjs`** — CLI runner, **works** (rewritten
+    against the ES6 module on the playground-fix pass: plain `await
+    import` of `wacl-minimal-demo/surftcl-bootstrap.mjs` under node —
+    no vm sandbox, no AMD shim). Loads the packages from the release
+    zips `ext/` builds, so it validates the shipped artifact; `make
+    test` builds both and runs it. The dom suite skips headless via
+    the `dom` constraint, exactly as designed.
+  - `tests/run-async.mjs` tested the removed Asyncify surface and was
+    deleted on the same pass.
 
-Four suites: `wacl-json.test`, `wacl-chan.test`, `wacl-dom.test`, and
-`wacl-bridge.test` (the `::surftcl::js::*` surface itself — re-entrancy
-+ error propagation, the regression guard for the removed eval-fence).
-All remaining tests are synchronous; the Asyncify-era asynchrony tests
-were removed with the feature. `chan-fileevent-1.1` survives because it
-tests synchronous pumping — Tcl-side `chan postevent` + `update`
-dispatching a fileevent — which needs no suspension.
+Five suites: `wacl-json.test`, `wacl-chan.test` (the C channel core),
+`wacl-dom.test`, `wacl-bridge.test` (the `::surftcl::js::*` surface
+itself — re-entrancy + error propagation, the regression guard for the
+removed eval-fence), and `wacl-stdio.test` (stdin honesty: blocked vs
+EOF, EOF-after-drain, stdin fileevents; its close() tests run last in
+the file because closing the page side of stdin is permanent for the
+session). All tests are synchronous; event-delivery tests
+(`chan-fileevent-1.1`, `stdio-stdin-2.1`) pump with `update`, which
+drains the C-queued channel notify events — no suspension involved.
+Outside tcltest, `tests/panic-smoke.mjs` runs as its own node process
+(a panic kills the module instance by design) and joins `make test`.
 
 Conventions to reuse when extending the suite:
 
@@ -578,9 +605,11 @@ Conventions to reuse when extending the suite:
     runs for real in the browser and skips cleanly headless. A fake DOM
     headless was rejected as testing the fake, not the package.
   - **The chan byte contract is tested, NUL included.** Bytes 1..255
-    round-trip with full fidelity *and* NUL truncates at the bridge
-    (the js::call return crosses as a C string) — a tested fact, not a
-    latent surprise (`chan-j2t-2.2`).
+    round-trip with full fidelity, *and* NUL crosses intact — channel
+    bytes move as pointer+length, so there is no C-string boundary to
+    truncate at (`chan-j2t-2.2`; it used to pin the truncation the old
+    string bridge had). Note the js::call *bridge* itself still moves C
+    strings — the byte-clean guarantee is the channel's.
 
 **CI.** There is no test CI. The old headless workflow ran against a
 committed wasm that is no longer committed; it was removed rather than
@@ -649,10 +678,11 @@ inconvenient case the default; not a priority until users ask.
 
 Three pages, each self-contained, no framework, loading the ES6 module
 directly. The old jQuery/RequireJS-era demo (`wacl-minimal-demo/wacl/`)
-is deleted. `make surftcl-demo` is supposed to mirror these into the
-separate **surftcl-demo** repo (the GitHub Pages site, `DEMOREPO`
-pointing at the checkout, sibling `../surftcl-demo` by default) — but
-that recipe is currently broken (see Known stale / broken).
+is deleted. `make surftcl-demo` mirrors these into the separate
+**surftcl-demo** repo (the GitHub Pages site, `DEMOREPO` pointing at
+the checkout, sibling `../surftcl-demo` by default): the three pages,
+the built `surftcl.mjs`/`surftcl.wasm`/`surftcl-bootstrap.mjs`, the
+loose packages, and the test files the pages fetch at boot.
 
 - **`/`** (the REPL) — the original Tcl terminal in the browser, and
   the reference for module usage: dynamic `import`, `surftcl.default`
@@ -660,15 +690,15 @@ that recipe is currently broken (see Known stale / broken).
   + `GrantEval()`, loose-package fetch into the wasm FS.
 - **`/playground/`** — DOM-from-Tcl playground: 4×4 card grid + task
   list sandbox, Tcl editor, examples ribbon. Modern CSS (Grid, oklch
-  per-card hues, keyframes). Currently broken mid-migration; fixing it
-  is the stated next priority (see Known stale / broken). Feature-wise
-  it's considered done for the alpha — the next capability step waits
-  on an SDL canvas extension (see the punted list). One accepted ribbon
-  idea for after the fix: a "seal the bridge" example
-  (`::surftcl::js::revoke eval`, then a failing `package require`),
-  with the page stating that un-sealing requires a refresh — only the
-  page's JS could re-grant, so within a page's lifetime the seal is
-  final, and the demo should say so plainly.
+  per-card hues, keyframes). **Works** — migrated to the ES6 module on
+  the playground-fix pass (dynamic `import`, `.sink` wiring, editor
+  runs through the synchronous `Eval`). Feature-wise it's considered
+  done for the alpha — the next capability step waits on an SDL canvas
+  extension (see the punted list). The ribbon ends with the accepted
+  "seal the bridge" example: `::surftcl::js::revoke eval`, then a
+  failing `package require surftcl::json`, with the script's comment
+  saying plainly that only the page's JS could re-grant, so within a
+  page's lifetime the seal is final — refresh to reset.
 - **`/tests/`** — browser test runner (see Test harness). Works.
 
 ### Detail: the REPL (`index.html`)
@@ -715,24 +745,16 @@ that recipe is currently broken (see Known stale / broken).
   prototyped only **after** the first public alpha announcement. The
   Asyncify findings that carry over are recorded in
   `docs/event-loop.md`.
-- **`surftcl::chan` rework.** See the package section; also re-examine
-  the Emscripten-stdio device layer (`DEFER(channel rework)`) in the
-  same pass — EAGAIN-capable devices would fix the stdin EOF conflation.
 - **`surftcl::pledge`** and a **per-interp function registry** — both
   recorded as DEFERs in the bootstrap; see the JS bridge section.
-- **`TclPanic` wiring.** A `Tcl_Panic` handler on the C side that
-  surfaces as the exported `TclPanic` error class instead of an
-  Emscripten abort.
 - **Replace the sed-patches with named patch files.** The two
   configure-time sed lines (`ZLIB_INCLUDE`, `-DTCL_THREADS=0`) should
   become files in a `patches/` directory (quilt-style) or a Tcl script.
   Deferred until the build pipeline is otherwise stable.
-- **Real-time stdin.** The REPL is JS-driven: Enter → `interp.Eval(line)`.
-  `interp.stdin.write` provides a one-shot queue, but a `gets stdin` on
-  an empty queue reads EOF rather than waiting. The blocking-read story
-  needs a suspension primitive (the JSPI tier) or EAGAIN-honest devices
-  plus fileevent-driven reads; it lives in the standard-channel/device
-  layer, not `surftcl::chan`.
+- **Blocking-feel `gets stdin`.** stdin is honest now (blocked vs EOF,
+  and `fileevent readable stdin` works — see Stdio), so event-driven
+  reads are the supported idiom. A `gets` that *waits* still needs a
+  suspension primitive: JSPI tier, post-alpha.
 - **Runaway-loop weak preemption (cooperative-model backstop).** A Tcl
   loop that never returns to the browser (`while 1 {puts lol}`) freezes
   the tab. A JS-side watchdog cannot catch it (its timer is frozen by
