@@ -82,6 +82,11 @@ const Encoder = new TextEncoder();
 // Output is delivered to FS.init per byte (or null for flush). We
 // accumulate per stream until a newline or flush, then hand a decoded
 // string to the sink.
+
+// DEFER(improved channels) Folding these into the SurfTclChanRegistry
+// as channels that can be reconfigured/freshly instantiated whenever they're needed
+// would provide a unified API for dealing with text streams. That's a big deal for
+// Tcl, the Everything is a String language.
 const stdout = {
   buffer: [],
   flush() {
@@ -125,6 +130,17 @@ const stderr = {
 // end-of-stream instead of a hang.
 Module['preRun'] = function () {
   Module.FS.init(
+    // DEFER(friendlier stdin) possible improvement: put a basic compatibility shim here?
+    // C code compiled under Emscripten still *expects* fd 0 to be stdin,
+    // because Emscripten misreports its system as GNU/Linux for compatibility
+    // with tooling that expects a real POSIX environment.
+    // I don't like that it does that, but the ecosystem is how it is.
+    // Rolling our own channel to replace stdin adds friction.
+    // A sensible compromise might be adding a shim and signposting it.
+    // ... *That being said,* the Emscripten stdio callbacks are already awkward to work with
+    // and as far as my reading comprehension takes me, partially undocumented.
+
+    // I need to get this in the hands of developers who aren't me...
     () => null,
     // bind is necessary because of how the "this" keyword works
     stdout._write_callback.bind(stdout),
@@ -132,6 +148,9 @@ Module['preRun'] = function () {
   );
 };
 
+// TODO(dther) change this to "class BridgedJsFunction",
+//  the class of all JS functions the Tcl side has named,
+//  has a name for, with the registry stored and accessed using static methods.
 export const JsFunctionRegistry = {
   /* SurfTcl.JsFunctionRegistry manages the capability to execute JS from within
    * the Tcl interpreter.
@@ -165,6 +184,7 @@ export const JsFunctionRegistry = {
    * the caller to serialize — JSON is the obvious default and is in the
    * ecosystem already. The bridge moves strings.
    */
+  // TODO(dther) JSON blobs should be returnable. I'm moving the code for that here, anyway.
 
   // DEFER(interpreter semantics) In keeping with Tcl's philosophy of "interpreters share nothing by default,"
   // the JS function registry should be per-interpreter, right? I think so, at least.
@@ -183,6 +203,11 @@ export const JsFunctionRegistry = {
   // `surftcl::pledge eval` should raise an error, directing to the documentation explaining
   // that eval access must be granted from the JS side, and pledging to use maximum permissions
   // is equivalent to not pledging at all.
+  //
+  // NOTE(dther) 2026-10-14 Giving the pledge system thought, I don't think it's worth it.
+  // .mjs files are *fine,* and if you control the host (the expected case for almost every SurfTcl application ever),
+  // you presumably control the local file tree, and know where the .mjs files are.
+  // Eval bootstrapping is more trouble than it's worth because of the namespacing weirdness it can create.
 
   _functions: new Map(),
 
@@ -422,6 +447,103 @@ export class TclResult {
   }
 }
 
+// JSON PARSING ------
+//
+// Tcl-accessible JSON parsing, because why *wouldn't* you want JSON?
+// it comes free with your web browser.
+// rl_json is the interface I'm copying. No notes.
+
+// TODO (dther) possible reason: maybe you're running Tcl in a vacuum and don't expect to ever pass data.
+// I don't know if this is worth splitting into a separate module yet.
+
+// TODO(dther) json really shouldn't re-parse on every call.
+//   Some kind of table of every JSON blob would work,
+//   but then I'd need to write a garbage collector.
+//   A custom Tcl_ObjType would handle caches properly for free and it's what rl_json does.
+
+// TODO(dther) this is a tiny subset of rl_json rn
+const JSONParser = {
+  grant() {
+    // TODO(dther) This is __really__ clunky. I should write a better interface for this.
+    JsFunctionRegistry.register("surftcl_json_get", this.get);
+    JsFunctionRegistry.register("surftcl_json_extract", this.extract);
+    JsFunctionRegistry.register("surftcl_json_exists", this.exists);
+
+/*
+    // JS doesn't like curly braces
+    Runtime.Eval("namespace eval ::surftcl::json \{
+      proc get {blob args} \{
+        ::surftcl::js::call __surftcl_json_get $blob {*}$args
+      }
+
+      proc extract {blob args} \{
+        ::surftcl::js::call __surftcl_json_extract $blob {*}$args
+      }
+
+      proc exists {blob args} \{
+        ::surftcl::js::call __surftcl_json_exists $blob {*}$args
+      }
+    }");
+*/
+
+  },
+
+  get(args) {
+    var blob = args[0];
+    var path = args.slice(1);
+    var cur;
+    try { cur = JSON.parse(blob); }
+    catch (e) {
+      return TclResult.error("json::get: " + e.message, { errorCode: ["JSON", "PARSE"] });
+    }
+    for (var i = 0; i < path.length; i++) {
+      if (cur === null || typeof cur !== "object" || !(path[i] in cur)) {
+        return TclResult.error("json::get: no such path: " + JSON.stringify(path.slice(0, i + 1)),
+            { errorCode: ["JSON", "BAD_PATH"] });
+      }
+      cur = cur[path[i]];
+    }
+    if (cur === null) return "";
+    if (typeof cur === "object") return JSON.stringify(cur);
+    return String(cur);
+  },
+
+  extract(args) {
+    var blob = args[0];
+    var path = args.slice(1);
+    var cur;
+    try { cur = JSON.parse(blob); }
+    catch (e) {
+      return TclResult.error("json::extract: " + e.message, { errorCode: ["JSON", "PARSE"] });
+    }
+    for (var i = 0; i < path.length; i++) {
+      if (cur === null || typeof cur !== "object" || !(path[i] in cur)) {
+        return TclResult.error("json::extract: no such path: " + JSON.stringify(path.slice(0, i + 1)),
+            { errorCode: ["JSON", "BAD_PATH"] });
+      }
+      cur = cur[path[i]];
+    }
+    return JSON.stringify(cur);
+  },
+
+  exists(args) {
+    var blob = args[0];
+    var path = args.slice(1);
+    var cur;
+    try { cur = JSON.parse(blob); }
+    catch (e) {
+       return TclResult.error("json::exists: " + e.message,
+           { errorCode: ["JSON", "PARSE"] });
+    }
+    for (var i = 0; i < path.length; i++) {
+      if (cur === null || typeof cur !== "object") return "0";
+      if (!(path[i] in cur)) return "0";
+      cur = cur[path[i]];
+    }
+    return "1";
+  },
+}
+
 // -------------------------------------------------------------------------
 
 Module['postRun'] = () => {
@@ -464,6 +586,7 @@ Module['postRun'] = () => {
     _chanExists:        Module.cwrap('SurfTcl_ChanExists',              'number', ['string']),
     _chanNames:         Module.cwrap('SurfTcl_ChanNames',               'string', []),
 
+    // TODO(dther) GrantEval should be in a .mjs file that's only optionally imported, now that I've made peace with .mjs files.
     GrantEval() {
       // Grants `surftcl::js::call eval` privileges to the interpreter.
       // scoped such that `this` and `surftcl` are bound to the runtime after
@@ -509,6 +632,13 @@ Module['postRun'] = () => {
     // I don't want the inconvenient case to be the default case, so I'm deciding that this
     // isn't a priority until users begin requesting it.
 
+    // NOTE(dther) 2026-10-14: In response to above? Tcl shouldn't load JS code. SurfTcl's zip holds a *executable manifest*
+    // that's run inside a tiny safe interp (for convenience macros + runtime checks)
+    // that the host populates with information the application is allowed to know about.
+    // The manifest lists names of SurfTcl-compatible modules, and if they're there, they're automatically loaded in. If they're not,
+    // then an error is emitted that can be caught and handled by the executed manifest.
+
+    // TODO(dther) move RevokeEval to its own .mjs, alongside GrantEval, and make it per-interp, for that matter
     RevokeEval() { this.js.revoke("eval") },
     RevokeEvalPermanently() {
       this.GrantEval = () => {
@@ -563,11 +693,13 @@ Module['postRun'] = () => {
   // anything could acquire the fd-0 device); the facade keeps the
   // historical page-facing shape, write(text) and close().
   Runtime.stdin = Runtime.chan.attach("stdin");
+
+  // TODO(dther) this probably isn't the right place to instantiate JSON support
+  JSONParser.grant();
 }
 
 await createSurfTcl(Module);
 
-// SURFTCL_VERSION in opt/surftcl.h is the single source of truth;
-// asking the interp avoids keeping a second copy that can drift.
+// See SURFTCL_VERSION in `opt/surftcl.h`. Single source of truth.
 export const VERSION = Runtime.Eval("package provide surftcl");
 export default Runtime;
